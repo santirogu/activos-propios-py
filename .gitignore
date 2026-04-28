@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Output generado por la app
+salida/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
