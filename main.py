@@ -1,3 +1,4 @@
+import threading
 import tkinter as tk
 from tkinter import messagebox
 from pathlib import Path
@@ -63,15 +64,91 @@ def extraer_lsmw_a_txt(status_var: tk.StringVar) -> None:
     )
 
 
+def subir_a_sap(root: tk.Tk, status_var: tk.StringVar, button: tk.Button) -> None:
+    """Lanza la carga LSMW a SAP en un hilo background.
+
+    Confirma con el usuario, deshabilita el botón mientras corre y va
+    actualizando `status_var` desde el hilo principal vía `root.after`.
+    """
+    confirmar = messagebox.askyesno(
+        "Confirmar carga a SAP",
+        "Esto tomará el .txt más reciente de salida/ y ejecutará el flujo "
+        "LSMW en la sesión SAP abierta.\n\n"
+        "Asegúrate de:\n"
+        "  • Tener SAP abierto y con sesión iniciada.\n"
+        "  • Tener el proyecto LSMW pre-cargado.\n"
+        "  • No tocar SAP mientras se ejecuta el script.\n\n"
+        "¿Continuar?",
+    )
+    if not confirmar:
+        return
+
+    button.config(state="disabled")
+
+    def update_status(text: str) -> None:
+        root.after(0, status_var.set, text)
+
+    def show_info(title: str, message: str) -> None:
+        root.after(0, lambda: messagebox.showinfo(title, message))
+
+    def show_error(title: str, message: str) -> None:
+        root.after(0, lambda: messagebox.showerror(title, message))
+
+    def reenable() -> None:
+        root.after(0, lambda: button.config(state="normal"))
+
+    def worker() -> None:
+        try:
+            from sap_upload import (
+                SAP_LSMW_INPUT_PATH,
+                copy_to_sap_path,
+                get_latest_txt,
+                get_sap_session,
+                run_lsmw_flow,
+            )
+        except ImportError as exc:
+            show_error("Error de import", f"No se pudo importar sap_upload:\n{exc}")
+            reenable()
+            return
+
+        try:
+            update_status("Buscando .txt más reciente en salida/...")
+            latest = get_latest_txt()
+
+            if SAP_LSMW_INPUT_PATH:
+                update_status(f"Copiando archivo a {SAP_LSMW_INPUT_PATH}...")
+                copy_to_sap_path(latest, SAP_LSMW_INPUT_PATH)
+
+            update_status("Conectando a la sesión SAP...")
+            session = get_sap_session()
+
+            update_status("Ejecutando flujo LSMW (no toques SAP)...")
+            run_lsmw_flow(session)
+
+            update_status("Carga completada. Revisa SM35 para el log de la BDC.")
+            show_info(
+                "Carga completada",
+                "Flujo LSMW ejecutado correctamente.\n\n"
+                "Revisa SM35 para ver el log de la sesión BDC.",
+            )
+        except Exception as exc:
+            update_status("")
+            show_error("Error en carga SAP", str(exc))
+        finally:
+            reenable()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def main() -> None:
     root = tk.Tk()
-    root.title("Extracción LSMW")
-    root.geometry("440x180")
+    root.title("Creación Activos SAP")
+    root.geometry("480x260")
     root.resizable(False, False)
 
     title = tk.Label(
         root,
-        text="Extracción de la hoja LSMW",
+        text="Creación de Activos Fijos en SAP",
         font=("Helvetica", 13, "bold"),
     )
     title.pack(pady=(18, 4))
@@ -83,22 +160,40 @@ def main() -> None:
         fg="#555",
         justify="center",
     )
-    subtitle.pack(pady=(0, 10))
+    subtitle.pack(pady=(0, 12))
 
     status_var = tk.StringVar(value="")
 
-    btn = tk.Button(
+    btn_extraer = tk.Button(
         root,
         text="Extraer información en txt",
         command=lambda: extraer_lsmw_a_txt(status_var),
         font=("Helvetica", 11),
         padx=18,
         pady=6,
+        width=24,
     )
-    btn.pack()
+    btn_extraer.pack(pady=(0, 8))
 
-    status = tk.Label(root, textvariable=status_var, font=("Helvetica", 9), fg="#1a7f37")
-    status.pack(pady=(10, 0))
+    btn_subir = tk.Button(
+        root,
+        text="Subir a SAP",
+        font=("Helvetica", 11),
+        padx=18,
+        pady=6,
+        width=24,
+    )
+    btn_subir.config(command=lambda: subir_a_sap(root, status_var, btn_subir))
+    btn_subir.pack()
+
+    status = tk.Label(
+        root,
+        textvariable=status_var,
+        font=("Helvetica", 9),
+        fg="#1a7f37",
+        wraplength=440,
+    )
+    status.pack(pady=(12, 0))
 
     root.mainloop()
 

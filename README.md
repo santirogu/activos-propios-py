@@ -1,6 +1,9 @@
 # Creación de Activos Fijos SAP
 
-Aplicación de escritorio en Python que automatiza la **extracción de la hoja `LSMW`** desde el formato dinámico de creación y capitalización de activos fijos, generando un archivo `.txt` separado por tabulación listo para ser cargado en SAP mediante LSMW.
+Aplicación de escritorio en Python que automatiza dos pasos del proceso de creación y capitalización de activos fijos en SAP:
+
+1. **Extracción** de la hoja `LSMW` del formato dinámico Excel a un `.txt` separado por tabulación.
+2. **Carga** de ese `.txt` a SAP vía la transacción LSMW, ejecutando el flujo completo (Specify Files → Read Data → Convert Data → Create BI Session → Run BI) mediante **SAP GUI Scripting**.
 
 ## Diagrama del proceso
 
@@ -10,19 +13,21 @@ El proceso completo contempla:
 
 1. **INICIO** — el usuario diligencia el formulario de creación en el archivo Excel maestro (`Formato_Dinamico_.xlsx`).
 2. **Formulario de creación** — captura de los datos del activo en la hoja `Formato`.
-3. **Extraer hoja LSMW en un `.txt`** — *paso automatizado por esta app*: lee la hoja `LSMW` del Excel y la exporta como TSV en la carpeta `salida/`.
+3. **Extraer hoja LSMW en un `.txt`** — *automatizado por el botón "Extraer información en txt"*.
 4. **Login en SAP** — paso manual realizado por el usuario.
-5. **Correr `script.py`** — script encargado de cargar el archivo en SAP.
-6. **Generar reporte** — documento con el resultado de la creación.
+5. **Correr `script.py`** — *automatizado por el botón "Subir a SAP"* (ejecuta `sap_upload.py`).
+6. **Generar reporte** — log de la sesión BDC visible en la transacción SM35.
 7. **FIN**.
 
-> Esta aplicación cubre específicamente el paso 3 del flujo.
+> Esta aplicación cubre los **pasos 3 y 5** del flujo. La autenticación en SAP (paso 4) sigue siendo manual.
 
 ## Requerimientos
 
-- **Python 3.9 o superior** con soporte para Tkinter (incluido por defecto en la mayoría de instalaciones; en macOS, el Python de Homebrew 3.12 **no** trae Tk, usa `python.org` o el del sistema).
-- **openpyxl** (única dependencia externa).
-- El archivo `resources/Formato_Dinamico_.xlsx` debe existir en la raíz del proyecto.
+- **Python 3.9 o superior** con soporte para Tkinter (incluido por defecto; en macOS, el Python de Homebrew 3.12 **no** trae Tk — usa `python.org` o el del sistema).
+- **openpyxl** — manipulación del Excel (multiplataforma).
+- **pywin32** — solo necesario para el botón "Subir a SAP". Se instala automáticamente solo en Windows gracias al marcador `platform_system == "Windows"` en `requirements.txt`.
+- El archivo `resources/Formato_Dinamico_.xlsx` debe existir.
+- Para subir a SAP: SAP GUI for Windows abierto con sesión iniciada y `sapgui/user_scripting = TRUE` (ver sección "Configuración SAP" más abajo).
 
 ## Quick start
 
@@ -43,7 +48,10 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Al abrirse la ventana, hacer clic en **"Extraer información en txt"**. El archivo resultante se guarda en `salida/LSMW_YYYYMMDD_HHMMSS.txt`.
+La ventana muestra dos botones:
+
+- **Extraer información en txt** — funciona en cualquier sistema operativo.
+- **Subir a SAP** — solo funciona en Windows con SAP GUI configurado.
 
 ## Cómo ejecutar la app
 
@@ -51,12 +59,29 @@ Al abrirse la ventana, hacer clic en **"Extraer información en txt"**. El archi
 python main.py
 ```
 
-La interfaz contiene un único botón. Al presionarlo:
+### Botón "Extraer información en txt"
 
 - Lee la hoja `LSMW` de `resources/Formato_Dinamico_.xlsx`.
-- Crea la carpeta `salida/` en la raíz del proyecto si no existe.
-- Genera un archivo TSV con el patrón `LSMW_YYYYMMDD_HHMMSS.txt` (timestamp para no sobreescribir corridas previas).
-- Muestra un mensaje de confirmación con la cantidad de filas exportadas.
+- Crea la carpeta `salida/` en la raíz si no existe.
+- Genera un archivo TSV con el patrón `LSMW_YYYYMMDD_HHMMSS.txt`.
+- Muestra confirmación con la cantidad de filas exportadas.
+
+### Botón "Subir a SAP"
+
+- Pide confirmación antes de ejecutar (operación sensible que toma control de SAP).
+- Toma el `.txt` más reciente de `salida/`.
+- Si `SAP_LSMW_INPUT_PATH` está configurado en `sap_upload.py`, copia el archivo a esa ruta.
+- Conecta a la sesión SAP abierta vía SAP GUI Scripting (COM).
+- Ejecuta el flujo LSMW completo: Specify Files → Assign Files → Read Data → Display Read Data → Convert Data → Display Converted Data → Create Batch Input Session → Run Batch Input Session → Process BDC Session.
+- El flujo corre en un hilo background, así la GUI no se congela.
+- El status label muestra el progreso paso a paso.
+- Al terminar, mostrar mensaje y sugerir revisar SM35.
+
+También se puede ejecutar la carga sin GUI:
+
+```bash
+python sap_upload.py
+```
 
 ### Notas sobre los datos exportados
 
@@ -65,59 +90,146 @@ La hoja `LSMW` está cableada con fórmulas que referencian la hoja `Formato`. `
 - Si después de modificar el Excel quieres ver los nuevos valores en el TXT, **abre y guarda el Excel** antes de ejecutar la app (Excel recalcula y cachea las fórmulas al guardar).
 - Las celdas referenciadas que estén vacías pueden aparecer como `0` (comportamiento estándar de Excel para referencias numéricas a celdas vacías).
 
+## Configuración SAP (una sola vez por máquina)
+
+Para que el botón "Subir a SAP" funcione:
+
+1. **Cliente** — habilitar scripting en SAP GUI:
+   *Options → Accessibility & Scripting → Scripting → "Enable scripting"*. Recomendado desmarcar los dos "Notify when..." para experiencia desatendida.
+2. **Servidor** — parámetro `sapgui/user_scripting = TRUE` (transacción RZ11). Si no está habilitado, pídele al equipo Basis que lo active.
+3. **Iniciar sesión SAP** antes de presionar el botón. El script no autentica.
+4. **Pre-cargar el proyecto LSMW** — abrir LSMW manualmente al menos una vez con Subproject + Object correctos. SAP recuerda la última selección.
+5. **Configurar la ruta del archivo** — opcional pero recomendado. En [sap_upload.py:44](sap_upload.py#L44) cambia:
+   ```python
+   SAP_LSMW_INPUT_PATH: Optional[str] = None
+   ```
+   por la ruta configurada en el paso "Specify Files" del proyecto LSMW, ej:
+   ```python
+   SAP_LSMW_INPUT_PATH = r"C:\sap\lsmw_input\activos.txt"
+   ```
+   Si lo dejas en `None`, asume que la ruta del `.txt` en `salida/` ya coincide con la de SAP.
+
 ## Cómo ejecutar las pruebas
 
 Las pruebas usan `unittest` (incluido en la librería estándar, sin dependencias adicionales).
 
 ```bash
-# Ejecutar toda la suite
+# Toda la suite
+python -m unittest discover tests -v
+
+# Solo el módulo principal
 python -m unittest tests.test_main -v
 
-# Ejecutar un test específico
-python -m unittest tests.test_main.ExportSheetToTsvTest.test_writes_tab_separated_content
+# Solo el módulo de carga SAP
+python -m unittest tests.test_sap_upload -v
+
+# Un test específico
+python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_happy_path
 ```
 
 ### Cobertura de pruebas
 
-La suite incluye 10 pruebas:
+La suite contiene **54 pruebas** distribuidas en dos archivos:
+
+#### `tests/test_main.py` (22 pruebas)
+
+**`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
+
+**`RealWorkbookSmokeTest`** (1 prueba) — smoke test contra el Excel real del proyecto.
+
+**`SubirASapTest`** (12 pruebas) — handler del botón "Subir a SAP":
 
 | Test | Qué valida |
 |---|---|
-| `test_writes_tab_separated_content` | Contenido exacto separado por tabulación |
-| `test_none_values_become_empty_strings` | Celdas vacías (`None`) se convierten a string vacío |
-| `test_creates_output_directory_if_missing` | Crea directorios anidados si no existen |
-| `test_filename_has_timestamp_pattern` | Nombre de archivo con patrón `LSMW_YYYYMMDD_HHMMSS.txt` |
-| `test_custom_file_prefix` | Permite configurar el prefijo del archivo |
-| `test_missing_excel_raises_file_not_found` | Lanza excepción si el Excel no existe |
-| `test_missing_sheet_raises_value_error` | Lanza excepción si la hoja no existe |
-| `test_returns_row_count_matching_written_lines` | El contador de filas coincide con las líneas escritas |
-| `test_does_not_overwrite_when_called_in_different_seconds` | Genera nombres únicos por timestamp |
-| `test_extracts_lsmw_sheet_from_real_file` | Smoke test contra el Excel real del proyecto |
+| `test_cancel_confirmation_does_not_start_thread` | Cancelar el diálogo no lanza el worker |
+| `test_cancel_does_not_modify_status` | Cancelar no toca `status_var` |
+| `test_confirmation_disables_button_before_starting_worker` | Botón deshabilitado antes del thread |
+| `test_worker_calls_full_flow_on_happy_path` | `get_latest_txt` + `get_sap_session` + `run_lsmw_flow(session)` |
+| `test_worker_reenables_button_after_success` | Tras éxito el botón vuelve a `normal` |
+| `test_worker_updates_status_to_completion_message` | Status final contiene "completada" |
+| `test_worker_skips_copy_when_sap_path_not_configured` | `SAP_LSMW_INPUT_PATH=None` → no copia |
+| `test_worker_copies_to_sap_path_when_configured` | Copia con la ruta correcta cuando está configurada |
+| `test_worker_handles_missing_txt` | `FileNotFoundError` → error, botón se reactiva |
+| `test_worker_handles_sap_connection_error` | `RuntimeError` SAP → error, botón se reactiva |
+| `test_worker_handles_lsmw_flow_error` | Excepción del flujo → error, NO muestra info de éxito |
+| `test_worker_resets_status_on_error` | `status_var` se vacía tras error |
+
+#### `tests/test_sap_upload.py` (32 pruebas)
+
+| Clase | Tests | Cobertura |
+|---|---|---|
+| `GetLatestTxtTest` | 4 | Directorio faltante, sin archivos, mtime más reciente, ignora otros patrones |
+| `CopyToSapPathTest` | 2 | Copia contenido, crea directorios padre |
+| `GetSapSessionTest` | 5 | pywin32 ausente, SAP no corre, sin conexiones, sin sesiones, devuelve sesión OK |
+| `OpenLsmwTest` | 2 | maximize + okcd + sendVKey + btn[8], orden correcto |
+| `SelectStepRowTest` | 3 | Deselecciona default, selecciona target, foco en celda |
+| `StepSpecifyFilesTest` | 1 | Row 6 + btn[32] + Back |
+| `StepAssignFilesTest` | 1 | Row 7 + btn[32] + sendVKey(3) |
+| `StepReadDataTest` | 1 | Row 8 + btn[32] + btn[8] + 2× sendVKey(3) |
+| `StepDisplayReadDataTest` | 1 | btn[32] + popup confirm + back |
+| `StepConvertDataTest` | 1 | btn[32] + sendVKey(8) + 2× sendVKey(3) |
+| `StepDisplayConvertedDataTest` | 1 | btn[32] + popup confirm + back |
+| `StepCreateBatchInputTest` | 1 | btn[32] + chkP_KEEP + btn[8] + popup |
+| `StepRunBatchInputTest` | 1 | Solo btn[32] |
+| `ProcessBdcSessionTest` | 1 | Tabla BDC + modo error + log all + expert + 2× OK |
+| `RunLsmwFlowTest` | 2 | Orden completo de los 10 pasos, todos reciben `session` |
+| `MainEntryPointTest` | 5 | Exit code 0/1 según escenario (sin txt, SAP falla, copia configurada, etc.) |
+
+**Estrategia de mocking SAP**: `MockSAPSession` registra cada llamada `findById(...).method()` en `session.actions` como tuplas `(sap_id, method, *args)` y expone los elementos vía `session._elements[id]` para inspeccionar propiedades (`text`, `selected`, `caretPosition`). Las filas de tablas usan `_MockRow` con setter que loguea cambios de `selected`. Esto permite verificar la secuencia exacta de IDs y métodos SAP sin necesidad de un sistema SAP real.
+
+**Estrategia de mocking GUI**: `_SyncFakeThread` reemplaza `threading.Thread` para ejecutar el worker síncrono; `root.after` se sobreescribe en `setUp` para invocar callbacks inmediatamente. `patch.multiple("sap_upload", ...)` inyecta los mocks de las funciones del módulo; los mocks se guardan en `self.mocks` para verificación.
 
 ## Estructura del proyecto
 
 ```
 .
-├── main.py                          # App GUI + función pura export_sheet_to_tsv
-├── requirements.txt                 # Dependencias (openpyxl)
+├── main.py                          # App GUI: 2 botones (extraer + subir a SAP)
+├── sap_upload.py                    # Lógica de carga LSMW vía SAP GUI Scripting
+├── requirements.txt                 # openpyxl + pywin32 (Windows only)
 ├── README.md                        # Este archivo
 ├── docs/
 │   └── flujo-proceso.png            # Diagrama del proceso completo
 ├── resources/
-│   └── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla
-├── salida/                          # Carpeta generada automáticamente con los .txt
+│   ├── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla
+│   └── script_sap_base.txt          # Grabación VBS de referencia (UTF-16)
+├── salida/                          # Carpeta generada con los .txt exportados
 └── tests/
-    └── test_main.py                 # Pruebas unitarias (unittest)
+    ├── test_main.py                 # 22 pruebas: extracción + botón SAP
+    └── test_sap_upload.py           # 32 pruebas: flujo LSMW completo
 ```
 
 ## Arquitectura del código
 
-`main.py` separa la lógica en dos funciones:
+### `main.py`
 
-- **`export_sheet_to_tsv(excel_path, sheet_name, output_dir, file_prefix="LSMW")`** — función pura que realiza la extracción y devuelve `(ruta_archivo, filas_escritas)`. Lanza `FileNotFoundError` si el Excel no existe y `ValueError` si la hoja no existe. Es la pieza testeable.
-- **`extraer_lsmw_a_txt(status_var)`** — wrapper de GUI que invoca la función pura y traduce excepciones a diálogos de Tkinter (`messagebox`).
+- **`export_sheet_to_tsv(excel_path, sheet_name, output_dir, file_prefix="LSMW")`** — función pura que realiza la extracción y devuelve `(ruta_archivo, filas_escritas)`. Lanza `FileNotFoundError` / `ValueError`. Es la pieza testeable de la extracción.
+- **`extraer_lsmw_a_txt(status_var)`** — wrapper GUI del botón "Extraer", traduce excepciones a `messagebox`.
+- **`subir_a_sap(root, status_var, button)`** — handler del botón "Subir a SAP". Pide confirmación, deshabilita el botón, lanza un hilo background que invoca las funciones de `sap_upload.py` y reporta progreso vía `root.after()` (thread-safe en Tkinter). El import de `sap_upload` es lazy dentro del worker para que `main.py` arranque sin pywin32 instalado.
 
-Esta separación permite probar la lógica sin necesidad de instanciar la interfaz gráfica.
+### `sap_upload.py`
+
+Replica 1:1 los pasos grabados en `resources/script_sap_base.txt`. Cada paso del flujo LSMW está en una función dedicada (`open_lsmw`, `step_specify_files`, `step_assign_files`, `step_read_data`, `step_display_read_data`, `step_convert_data`, `step_display_converted_data`, `step_create_batch_input`, `step_run_batch_input`, `process_bdc_session`). El orquestador `run_lsmw_flow(session)` los llama en secuencia.
+
+Funciones de soporte:
+- **`get_latest_txt(salida_dir)`** — devuelve el `LSMW_*.txt` más reciente por mtime.
+- **`copy_to_sap_path(src, dst)`** — copia el `.txt` a la ruta configurada en `SAP_LSMW_INPUT_PATH`, creando directorios padre si faltan.
+- **`get_sap_session()`** — conecta al SAP GUI Scripting Engine vía `win32com.client` (importado lazy). Lanza `RuntimeError` con mensajes claros si pywin32 no está instalado, SAP GUI no corre, o no hay conexión/sesión activa.
+
+Esta separación granular permite testear cada paso de forma aislada con un `MockSAPSession`.
+
+## Mapeo del flujo LSMW
+
+| Paso del proyecto | Fila step list | Función Python | Acciones SAP |
+|---|---|---|---|
+| Specify Files | 6 | `step_specify_files` | btn[32] + Back |
+| Assign Files | 7 | `step_assign_files` | btn[32] + VK3 |
+| Read Data | 8 | `step_read_data` | btn[32] + btn[8] + 2×VK3 |
+| Display Read Data | (auto-avanza) | `step_display_read_data` | btn[32] + popup + VK3 |
+| Convert Data | (auto-avanza) | `step_convert_data` | btn[32] + VK8 + 2×VK3 |
+| Display Converted Data | (auto-avanza) | `step_display_converted_data` | btn[32] + popup + VK3 |
+| Create Batch Input Session | (auto-avanza) | `step_create_batch_input` | btn[32] + chkP_KEEP + btn[8] + popup |
+| Run Batch Input Session | (auto-avanza) | `step_run_batch_input` | btn[32] |
+| Procesar BDC Session | (en SM35-like) | `process_bdc_session` | row[0] + btn[8] + radError + chkLOGALL/EXPERT + 2×OK |
 
 ## Hoja LSMW: contenido exportado
 
@@ -132,3 +244,13 @@ La hoja `LSMW` mapea las columnas del formulario a los **nombres técnicos de ca
 - `POSNR` (Elemento PEP)
 - `ORD41`–`ORD44`, `GDLGRP` (Criterios de clasificación 1–5)
 - entre otros.
+
+## Diagnóstico de errores comunes en la carga SAP
+
+| Error | Causa probable | Solución |
+|---|---|---|
+| "No se pudo conectar a SAP GUI" | SAP no abierto o scripting deshabilitado | Abrir SAP GUI, habilitar scripting en Options |
+| "No hay sesiones activas" | Estás en la pantalla de login | Iniciar sesión en el sistema SAP |
+| "Falta la dependencia pywin32" | Estás en Mac/Linux o no instalaste deps | `pip install pywin32` (solo Windows) |
+| Falla en `select_step_row` | Proyecto LSMW incorrecto pre-cargado | Abrir LSMW manualmente con el proyecto correcto |
+| Falla en `step_read_data` | Ruta del `.txt` en LSMW no coincide | Configurar `SAP_LSMW_INPUT_PATH` o ajustar la ruta en LSMW |
