@@ -52,7 +52,7 @@ from typing import Optional
 # CONFIGURACIÓN
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SALIDA_DIR = PROJECT_ROOT / "salida"
 
 # Ruta donde el proyecto LSMW espera encontrar el .txt (paso "Specify Files").

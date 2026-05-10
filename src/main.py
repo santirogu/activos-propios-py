@@ -6,7 +6,7 @@ from datetime import datetime
 
 import openpyxl
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EXCEL_PATH = PROJECT_ROOT / "resources" / "Formato_Dinamico_.xlsx"
 OUTPUT_DIR = PROJECT_ROOT / "salida"
 SHEET_NAME = "LSMW "

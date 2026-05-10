@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import openpyxl
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import main  # noqa: E402
 from main import export_sheet_to_tsv, subir_a_sap  # noqa: E402
