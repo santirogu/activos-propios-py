@@ -1,8 +1,10 @@
 """
 sap_upload.py — Carga del .txt generado en salida/ a SAP vía LSMW.
 
-Replica los pasos grabados en `resources/script_sap_base.txt` usando
-SAP GUI Scripting desde Python (vía pywin32).
+Replica los pasos grabados en `resources/script_sap_base.txt` (flujo LSMW
+completo) y en `resources/Script1.vbs` (configuración dinámica del archivo
+de entrada en el paso "Specify Files") usando SAP GUI Scripting desde
+Python (vía pywin32).
 
 REQUISITOS DE EJECUCIÓN
 =======================
@@ -22,30 +24,25 @@ Configuración SAP (una sola vez por máquina):
 4. La transacción LSMW debe tener pre-cargado el proyecto/subproyecto/objeto
    correctos (basta con haberlos abierto manualmente al menos una vez en
    la sesión actual de SAP).
-5. El paso "Specify Files" del proyecto LSMW debe apuntar a la ruta donde
-   este script depositará el .txt (ver `SAP_LSMW_INPUT_PATH` abajo).
 
 USO
 ===
-    python sap_upload.py
+    python src/sap_upload.py
 
 El script:
 1. Toma el .txt más reciente de `salida/`.
-2. Si `SAP_LSMW_INPUT_PATH` está configurado, copia el .txt a esa ruta
-   (la que el proyecto LSMW espera leer).
-3. Conecta a la sesión SAP abierta.
-4. Ejecuta el flujo LSMW: Specify Files → Assign Files → Read Data →
+2. Conecta a la sesión SAP abierta.
+3. Ejecuta el flujo LSMW: configura la ruta del archivo en "Specify Files"
+   apuntando al .txt de salida/, luego Assign Files → Read Data →
    Display Read Data → Convert Data → Display Converted Data →
    Create Batch Input Session → Run Batch Input Session.
-5. Procesa la sesión BDC creada (modo error, log completo, experto).
+4. Procesa la sesión BDC creada (modo error, log completo, experto).
 """
 
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
-from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -55,22 +52,14 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SALIDA_DIR = PROJECT_ROOT / "salida"
 
-# Ruta donde el proyecto LSMW espera encontrar el .txt (paso "Specify Files").
-# Si se deja en None, el script no copia el archivo y asume que la ruta del
-# .txt en `salida/` coincide con la configurada en LSMW. Para producción,
-# fijar aquí la ruta absoluta en Windows. Ejemplo:
-#     SAP_LSMW_INPUT_PATH = r"C:\sap\lsmw_input\activos.txt"
-SAP_LSMW_INPUT_PATH: Optional[str] = None
-
-# Identificadores tomados del script base. Cambiar solo si el proyecto LSMW
-# tiene un step list distinto.
+# Identificadores tomados de las grabaciones VBS. Cambiar solo si el proyecto
+# LSMW tiene un step list distinto.
 LSMW_STEPLIST_TABLE = "wnd[0]/usr/tbl/SAPDMC/SAPLLSMW_OBJ_000TC_STEPLIST"
 DEFAULT_SELECTED_ROW = 13  # SAP marca esta fila por default; deseleccionar primero.
 
-# Pasos del proyecto LSMW que requieren selección manual de fila antes de
-# pulsar Execute (F6 = btn[32]). Fila 6 = Specify Files, 7 = Assign Files,
-# 8 = Read Data. Los pasos posteriores se ejecutan secuencialmente porque
-# el cursor avanza solo después de cada Execute.
+# Filas del step list que requieren selección manual antes de pulsar Execute
+# (F6 = btn[32]). Los pasos posteriores se ejecutan secuencialmente porque el
+# cursor avanza solo después de cada Execute.
 SPECIFY_FILES_ROW = 6
 ASSIGN_FILES_ROW = 7
 READ_DATA_ROW = 8
@@ -90,23 +79,15 @@ def get_latest_txt(salida_dir: Path = SALIDA_DIR) -> Path:
     if not salida_dir.exists():
         raise FileNotFoundError(
             f"No existe la carpeta {salida_dir}. "
-            f"Ejecuta primero `python main.py` para generar el .txt."
+            f"Ejecuta primero `python src/main.py` para generar el .txt."
         )
     txts = sorted(salida_dir.glob("LSMW_*.txt"), key=lambda p: p.stat().st_mtime)
     if not txts:
         raise FileNotFoundError(
             f"No hay archivos LSMW_*.txt en {salida_dir}. "
-            f"Ejecuta primero `python main.py`."
+            f"Ejecuta primero `python src/main.py`."
         )
     return txts[-1]
-
-
-def copy_to_sap_path(src: Path, dst: str) -> Path:
-    """Copia el .txt a la ruta esperada por LSMW. Crea el directorio si falta."""
-    dst_path = Path(dst)
-    dst_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst_path)
-    return dst_path
 
 
 def get_sap_session():
@@ -170,11 +151,52 @@ def open_lsmw(session) -> None:
     session.findById("wnd[0]/tbar[1]/btn[8]").press()
 
 
-def step_specify_files(session) -> None:
-    """Abre y cierra el paso "Specify Files" (verificación)."""
-    select_step_row(session, SPECIFY_FILES_ROW)
-    session.findById("wnd[0]/tbar[1]/btn[32]").press()  # F6 — Execute step
-    session.findById("wnd[0]/tbar[0]/btn[3]").press()   # Back
+def configurar_ruta_archivo(session, carpeta: str, nombre_archivo: str) -> None:
+    """Configura dinámicamente la ruta del archivo en el paso "Specify Files".
+
+    Replica `resources/Script1.vbs`. Entra al paso, edita la definición de
+    archivo apuntándola a `carpeta/nombre_archivo`, guarda y vuelve al step
+    list. Reemplaza la configuración manual previa de SAP_LSMW_INPUT_PATH.
+
+    Args:
+        session: sesión SAP GUI.
+        carpeta: ruta absoluta de la carpeta (ej. r"C:\\Users\\xxx\\salida").
+        nombre_archivo: nombre del archivo (ej. "LSMW_20260510_094838.txt").
+    """
+    # Foco en la celda del paso "Specify Files" (row 6) y F2 para abrirlo
+    cell_id = f"{LSMW_STEPLIST_TABLE}/txtGT_STEPLIST-STEPTEXT[0,{SPECIFY_FILES_ROW}]"
+    cell = session.findById(cell_id)
+    cell.setFocus()
+    cell.caretPosition = 5
+    session.findById("wnd[0]").sendVKey(2)
+
+    # Botón "Cambiar" (modo edición)
+    session.findById("wnd[0]/tbar[1]/btn[25]").press()
+
+    # Seleccionar la definición de archivo a editar
+    file_def = session.findById("wnd[0]/usr/lbl[43,6]")
+    file_def.setFocus()
+    file_def.caretPosition = 3
+
+    # Botón "Asignar archivo" — abre diálogo modal
+    session.findById("wnd[0]/tbar[1]/btn[27]").press()
+
+    # F4 en el modal para abrir el explorador de archivos del frontend
+    session.findById("wnd[1]").sendVKey(4)
+
+    # Ingresar ruta y nombre en el explorador (wnd[2])
+    session.findById("wnd[2]/usr/ctxtDY_PATH").text = carpeta
+    filename_field = session.findById("wnd[2]/usr/ctxtDY_FILENAME")
+    filename_field.text = nombre_archivo
+    filename_field.caretPosition = len(nombre_archivo)
+
+    # Confirmar diálogos: OK explorador → OK modal
+    session.findById("wnd[2]/tbar[0]/btn[0]").press()
+    session.findById("wnd[1]/tbar[0]/btn[0]").press()
+
+    # Volver al step list y confirmar guardar cambios
+    session.findById("wnd[0]/tbar[0]/btn[3]").press()
+    session.findById("wnd[1]/usr/btnSPOP-OPTION1").press()
 
 
 def step_assign_files(session) -> None:
@@ -252,10 +274,16 @@ def process_bdc_session(session) -> None:
     session.findById("wnd[1]/tbar[0]/btn[0]").press()   # OK confirmar
 
 
-def run_lsmw_flow(session) -> None:
-    """Ejecuta el flujo LSMW completo replicando script_sap_base.txt."""
+def run_lsmw_flow(session, carpeta: str, nombre_archivo: str) -> None:
+    """Ejecuta el flujo LSMW completo apuntando al archivo dado.
+
+    Args:
+        session: sesión SAP GUI activa.
+        carpeta: ruta absoluta de la carpeta donde está el .txt.
+        nombre_archivo: nombre del archivo .txt a cargar.
+    """
     open_lsmw(session)
-    step_specify_files(session)
+    configurar_ruta_archivo(session, carpeta, nombre_archivo)
     step_assign_files(session)
     step_read_data(session)
     step_display_read_data(session)
@@ -282,19 +310,6 @@ def main() -> int:
         return 1
     print(f"Archivo origen: {latest}")
 
-    if SAP_LSMW_INPUT_PATH:
-        try:
-            destino = copy_to_sap_path(latest, SAP_LSMW_INPUT_PATH)
-            print(f"Copiado a ruta SAP: {destino}")
-        except Exception as exc:
-            print(f"ERROR al copiar a la ruta SAP: {exc}", file=sys.stderr)
-            return 1
-    else:
-        print(
-            "(SAP_LSMW_INPUT_PATH no configurado: se asume que la ruta de "
-            "salida coincide con la configurada en el paso 'Specify Files'.)"
-        )
-
     try:
         session = get_sap_session()
     except RuntimeError as exc:
@@ -303,13 +318,13 @@ def main() -> int:
     print("Conectado a SAP. Ejecutando flujo LSMW...")
 
     try:
-        run_lsmw_flow(session)
+        run_lsmw_flow(session, str(latest.parent), latest.name)
     except Exception as exc:
         print(f"\nERROR durante el flujo LSMW: {exc}", file=sys.stderr)
         print(
             "Revisa la pantalla de SAP para ver en qué paso se detuvo. "
-            "Posibles causas: proyecto LSMW no pre-cargado, ruta de archivo "
-            "incorrecta en 'Specify Files', estructura del step list distinta.",
+            "Posibles causas: proyecto LSMW no pre-cargado, IDs de la pantalla "
+            "distintos, definición de archivo en otra posición.",
             file=sys.stderr,
         )
         return 1

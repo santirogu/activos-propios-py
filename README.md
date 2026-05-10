@@ -70,9 +70,8 @@ python src/main.py
 
 - Pide confirmación antes de ejecutar (operación sensible que toma control de SAP).
 - Toma el `.txt` más reciente de `salida/`.
-- Si `SAP_LSMW_INPUT_PATH` está configurado en `src/sap_upload.py`, copia el archivo a esa ruta.
 - Conecta a la sesión SAP abierta vía SAP GUI Scripting (COM).
-- Ejecuta el flujo LSMW completo: Specify Files → Assign Files → Read Data → Display Read Data → Convert Data → Display Converted Data → Create Batch Input Session → Run Batch Input Session → Process BDC Session.
+- Ejecuta el flujo LSMW completo: **configura dinámicamente la ruta del archivo en "Specify Files"** → Assign Files → Read Data → Display Read Data → Convert Data → Display Converted Data → Create Batch Input Session → Run Batch Input Session → Process BDC Session.
 - El flujo corre en un hilo background, así la GUI no se congela.
 - El status label muestra el progreso paso a paso.
 - Al terminar, mostrar mensaje y sugerir revisar SM35.
@@ -99,15 +98,8 @@ Para que el botón "Subir a SAP" funcione:
 2. **Servidor** — parámetro `sapgui/user_scripting = TRUE` (transacción RZ11). Si no está habilitado, pídele al equipo Basis que lo active.
 3. **Iniciar sesión SAP** antes de presionar el botón. El script no autentica.
 4. **Pre-cargar el proyecto LSMW** — abrir LSMW manualmente al menos una vez con Subproject + Object correctos. SAP recuerda la última selección.
-5. **Configurar la ruta del archivo** — opcional pero recomendado. En [src/sap_upload.py:44](src/sap_upload.py#L44) cambia:
-   ```python
-   SAP_LSMW_INPUT_PATH: Optional[str] = None
-   ```
-   por la ruta configurada en el paso "Specify Files" del proyecto LSMW, ej:
-   ```python
-   SAP_LSMW_INPUT_PATH = r"C:\sap\lsmw_input\activos.txt"
-   ```
-   Si lo dejas en `None`, asume que la ruta del `.txt` en `salida/` ya coincide con la de SAP.
+
+> **La ruta del archivo en LSMW ya no requiere configuración manual.** El script ahora la inyecta dinámicamente en cada corrida apuntando al `.txt` más reciente de `salida/`, replicando la grabación VBS de `resources/Script1.vbs`.
 
 ## Cómo ejecutar las pruebas
 
@@ -129,41 +121,39 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **54 pruebas** distribuidas en dos archivos:
+La suite contiene **57 pruebas** distribuidas en dos archivos:
 
-#### `tests/test_main.py` (22 pruebas)
+#### `tests/test_main.py` (21 pruebas)
 
 **`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
 
 **`RealWorkbookSmokeTest`** (1 prueba) — smoke test contra el Excel real del proyecto.
 
-**`SubirASapTest`** (12 pruebas) — handler del botón "Subir a SAP":
+**`SubirASapTest`** (11 pruebas) — handler del botón "Subir a SAP":
 
 | Test | Qué valida |
 |---|---|
 | `test_cancel_confirmation_does_not_start_thread` | Cancelar el diálogo no lanza el worker |
 | `test_cancel_does_not_modify_status` | Cancelar no toca `status_var` |
 | `test_confirmation_disables_button_before_starting_worker` | Botón deshabilitado antes del thread |
-| `test_worker_calls_full_flow_on_happy_path` | `get_latest_txt` + `get_sap_session` + `run_lsmw_flow(session)` |
+| `test_worker_calls_full_flow_on_happy_path` | `get_latest_txt` + `get_sap_session` + `run_lsmw_flow(session, carpeta, nombre)` |
 | `test_worker_reenables_button_after_success` | Tras éxito el botón vuelve a `normal` |
 | `test_worker_updates_status_to_completion_message` | Status final contiene "completada" |
-| `test_worker_skips_copy_when_sap_path_not_configured` | `SAP_LSMW_INPUT_PATH=None` → no copia |
-| `test_worker_copies_to_sap_path_when_configured` | Copia con la ruta correcta cuando está configurada |
+| `test_worker_passes_folder_and_filename_to_run_lsmw_flow` | Carpeta y nombre del .txt llegan correctos al flujo |
 | `test_worker_handles_missing_txt` | `FileNotFoundError` → error, botón se reactiva |
 | `test_worker_handles_sap_connection_error` | `RuntimeError` SAP → error, botón se reactiva |
 | `test_worker_handles_lsmw_flow_error` | Excepción del flujo → error, NO muestra info de éxito |
 | `test_worker_resets_status_on_error` | `status_var` se vacía tras error |
 
-#### `tests/test_sap_upload.py` (32 pruebas)
+#### `tests/test_sap_upload.py` (36 pruebas)
 
 | Clase | Tests | Cobertura |
 |---|---|---|
 | `GetLatestTxtTest` | 4 | Directorio faltante, sin archivos, mtime más reciente, ignora otros patrones |
-| `CopyToSapPathTest` | 2 | Copia contenido, crea directorios padre |
 | `GetSapSessionTest` | 5 | pywin32 ausente, SAP no corre, sin conexiones, sin sesiones, devuelve sesión OK |
 | `OpenLsmwTest` | 2 | maximize + okcd + sendVKey + btn[8], orden correcto |
 | `SelectStepRowTest` | 3 | Deselecciona default, selecciona target, foco en celda |
-| `StepSpecifyFilesTest` | 1 | Row 6 + btn[32] + Back |
+| `ConfigurarRutaArchivoTest` | 7 | Replica `Script1.vbs`: F2 al paso, btn[25]/btn[27], lbl[43,6], F4 al picker, set path/filename, OK + Back + SPOP-OPTION1, secuencia correcta |
 | `StepAssignFilesTest` | 1 | Row 7 + btn[32] + sendVKey(3) |
 | `StepReadDataTest` | 1 | Row 8 + btn[32] + btn[8] + 2× sendVKey(3) |
 | `StepDisplayReadDataTest` | 1 | btn[32] + popup confirm + back |
@@ -172,8 +162,8 @@ La suite contiene **54 pruebas** distribuidas en dos archivos:
 | `StepCreateBatchInputTest` | 1 | btn[32] + chkP_KEEP + btn[8] + popup |
 | `StepRunBatchInputTest` | 1 | Solo btn[32] |
 | `ProcessBdcSessionTest` | 1 | Tabla BDC + modo error + log all + expert + 2× OK |
-| `RunLsmwFlowTest` | 2 | Orden completo de los 10 pasos, todos reciben `session` |
-| `MainEntryPointTest` | 5 | Exit code 0/1 según escenario (sin txt, SAP falla, copia configurada, etc.) |
+| `RunLsmwFlowTest` | 2 | Orden completo de los 10 pasos, `configurar_ruta_archivo` recibe (carpeta, nombre) |
+| `MainEntryPointTest` | 4 | Exit code 0/1 según escenario; pasa carpeta y nombre del `.txt` al flujo |
 
 **Estrategia de mocking SAP**: `MockSAPSession` registra cada llamada `findById(...).method()` en `session.actions` como tuplas `(sap_id, method, *args)` y expone los elementos vía `session._elements[id]` para inspeccionar propiedades (`text`, `selected`, `caretPosition`). Las filas de tablas usan `_MockRow` con setter que loguea cambios de `selected`. Esto permite verificar la secuencia exacta de IDs y métodos SAP sin necesidad de un sistema SAP real.
 
@@ -209,11 +199,14 @@ La suite contiene **54 pruebas** distribuidas en dos archivos:
 
 ### `src/sap_upload.py`
 
-Replica 1:1 los pasos grabados en `resources/script_sap_base.txt`. Cada paso del flujo LSMW está en una función dedicada (`open_lsmw`, `step_specify_files`, `step_assign_files`, `step_read_data`, `step_display_read_data`, `step_convert_data`, `step_display_converted_data`, `step_create_batch_input`, `step_run_batch_input`, `process_bdc_session`). El orquestador `run_lsmw_flow(session)` los llama en secuencia.
+Replica los pasos grabados en dos VBS de SAP:
+- `resources/script_sap_base.txt` — flujo LSMW completo (Read Data, Convert, Create BI, Run BI, BDC processing).
+- `resources/Script1.vbs` — configuración dinámica del archivo de entrada en el paso "Specify Files".
+
+Cada paso está en una función dedicada (`open_lsmw`, `configurar_ruta_archivo`, `step_assign_files`, `step_read_data`, `step_display_read_data`, `step_convert_data`, `step_display_converted_data`, `step_create_batch_input`, `step_run_batch_input`, `process_bdc_session`). El orquestador `run_lsmw_flow(session, carpeta, nombre_archivo)` los llama en secuencia inyectando la ruta del .txt.
 
 Funciones de soporte:
 - **`get_latest_txt(salida_dir)`** — devuelve el `LSMW_*.txt` más reciente por mtime.
-- **`copy_to_sap_path(src, dst)`** — copia el `.txt` a la ruta configurada en `SAP_LSMW_INPUT_PATH`, creando directorios padre si faltan.
 - **`get_sap_session()`** — conecta al SAP GUI Scripting Engine vía `win32com.client` (importado lazy). Lanza `RuntimeError` con mensajes claros si pywin32 no está instalado, SAP GUI no corre, o no hay conexión/sesión activa.
 
 Esta separación granular permite testear cada paso de forma aislada con un `MockSAPSession`.
@@ -222,7 +215,7 @@ Esta separación granular permite testear cada paso de forma aislada con un `Moc
 
 | Paso del proyecto | Fila step list | Función Python | Acciones SAP |
 |---|---|---|---|
-| Specify Files | 6 | `step_specify_files` | btn[32] + Back |
+| Specify Files (configura ruta dinámica) | 6 | `configurar_ruta_archivo(session, carpeta, nombre)` | F2 + btn[25] + lbl[43,6] + btn[27] + F4 + DY_PATH/DY_FILENAME + 2×OK + Back + SPOP-OPTION1 |
 | Assign Files | 7 | `step_assign_files` | btn[32] + VK3 |
 | Read Data | 8 | `step_read_data` | btn[32] + btn[8] + 2×VK3 |
 | Display Read Data | (auto-avanza) | `step_display_read_data` | btn[32] + popup + VK3 |
@@ -254,4 +247,5 @@ La hoja `LSMW` mapea las columnas del formulario a los **nombres técnicos de ca
 | "No hay sesiones activas" | Estás en la pantalla de login | Iniciar sesión en el sistema SAP |
 | "Falta la dependencia pywin32" | Estás en Mac/Linux o no instalaste deps | `pip install pywin32` (solo Windows) |
 | Falla en `select_step_row` | Proyecto LSMW incorrecto pre-cargado | Abrir LSMW manualmente con el proyecto correcto |
-| Falla en `step_read_data` | Ruta del `.txt` en LSMW no coincide | Configurar `SAP_LSMW_INPUT_PATH` o ajustar la ruta en LSMW |
+| Falla en `configurar_ruta_archivo` | El proyecto LSMW tiene la definición de archivo en otra posición | Re-grabar `Script1.vbs` con tu proyecto y ajustar IDs (`lbl[43,6]`, `btn[25]`, `btn[27]`) |
+| Falla en `step_read_data` | El archivo no existe en la ruta inyectada o no tiene permisos | Verifica que `salida/<archivo>` exista y SAP tenga acceso al disco |

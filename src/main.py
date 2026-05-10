@@ -100,8 +100,6 @@ def subir_a_sap(root: tk.Tk, status_var: tk.StringVar, button: tk.Button) -> Non
     def worker() -> None:
         try:
             from sap_upload import (
-                SAP_LSMW_INPUT_PATH,
-                copy_to_sap_path,
                 get_latest_txt,
                 get_sap_session,
                 run_lsmw_flow,
@@ -115,15 +113,11 @@ def subir_a_sap(root: tk.Tk, status_var: tk.StringVar, button: tk.Button) -> Non
             update_status("Buscando .txt más reciente en salida/...")
             latest = get_latest_txt()
 
-            if SAP_LSMW_INPUT_PATH:
-                update_status(f"Copiando archivo a {SAP_LSMW_INPUT_PATH}...")
-                copy_to_sap_path(latest, SAP_LSMW_INPUT_PATH)
-
             update_status("Conectando a la sesión SAP...")
             session = get_sap_session()
 
             update_status("Ejecutando flujo LSMW (no toques SAP)...")
-            run_lsmw_flow(session)
+            run_lsmw_flow(session, str(latest.parent), latest.name)
 
             update_status("Carga completada. Revisa SM35 para el log de la BDC.")
             show_info(

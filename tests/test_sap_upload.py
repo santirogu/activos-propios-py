@@ -23,7 +23,7 @@ from sap_upload import (  # noqa: E402
     LSMW_STEPLIST_TABLE,
     READ_DATA_ROW,
     SPECIFY_FILES_ROW,
-    copy_to_sap_path,
+    configurar_ruta_archivo,
     get_latest_txt,
     get_sap_session,
     open_lsmw,
@@ -37,7 +37,6 @@ from sap_upload import (  # noqa: E402
     step_display_read_data,
     step_read_data,
     step_run_batch_input,
-    step_specify_files,
 )
 
 
@@ -145,40 +144,6 @@ class GetLatestTxtTest(unittest.TestCase):
         lsmw.write_text("ok", encoding="utf-8")
 
         self.assertEqual(get_latest_txt(self.salida), lsmw)
-
-
-# ---------------------------------------------------------------------------
-# copy_to_sap_path
-# ---------------------------------------------------------------------------
-
-
-class CopyToSapPathTest(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.tmp = Path(self._tmp.name)
-
-    def tearDown(self):
-        self._tmp.cleanup()
-
-    def test_copies_content_to_destination(self):
-        src = self.tmp / "src.txt"
-        src.write_text("contenido prueba", encoding="utf-8")
-        dst = self.tmp / "dst.txt"
-
-        result = copy_to_sap_path(src, str(dst))
-
-        self.assertEqual(result, dst)
-        self.assertEqual(dst.read_text(encoding="utf-8"), "contenido prueba")
-
-    def test_creates_parent_directory_if_missing(self):
-        src = self.tmp / "src.txt"
-        src.write_text("x", encoding="utf-8")
-        dst = self.tmp / "a" / "b" / "c" / "dst.txt"
-
-        copy_to_sap_path(src, str(dst))
-
-        self.assertTrue(dst.parent.is_dir())
-        self.assertTrue(dst.exists())
 
 
 # ---------------------------------------------------------------------------
@@ -310,15 +275,75 @@ class SelectStepRowTest(unittest.TestCase):
         self.assertTrue(steplist._rows[READ_DATA_ROW]._selected)
 
 
-class StepSpecifyFilesTest(unittest.TestCase):
-    def test_selects_row_executes_and_returns(self):
-        session = MockSAPSession()
-        step_specify_files(session)
+class ConfigurarRutaArchivoTest(unittest.TestCase):
+    """Verifica la replicación 1:1 de resources/Script1.vbs."""
 
-        steplist = session._elements[LSMW_STEPLIST_TABLE]
-        self.assertTrue(steplist._rows[SPECIFY_FILES_ROW]._selected)
-        self.assertIn(("wnd[0]/tbar[1]/btn[32]", "press"), session.actions)
+    CARPETA = r"C:\Users\test\salida"
+    NOMBRE = "LSMW_20260510_094838.txt"
+
+    def _ejecutar(self):
+        session = MockSAPSession()
+        configurar_ruta_archivo(session, self.CARPETA, self.NOMBRE)
+        return session
+
+    def test_opens_specify_files_step_with_f2(self):
+        session = self._ejecutar()
+        cell_id = f"{LSMW_STEPLIST_TABLE}/txtGT_STEPLIST-STEPTEXT[0,{SPECIFY_FILES_ROW}]"
+        self.assertIn((cell_id, "setFocus"), session.actions)
+        self.assertEqual(session._elements[cell_id].caretPosition, 5)
+        self.assertIn(("wnd[0]", "sendVKey", 2), session.actions)
+
+    def test_presses_change_mode_and_assign_buttons(self):
+        session = self._ejecutar()
+        # btn[25] = modo edición, btn[27] = "Asignar archivo"
+        self.assertIn(("wnd[0]/tbar[1]/btn[25]", "press"), session.actions)
+        self.assertIn(("wnd[0]/tbar[1]/btn[27]", "press"), session.actions)
+
+    def test_focuses_file_definition_label(self):
+        session = self._ejecutar()
+        self.assertIn(("wnd[0]/usr/lbl[43,6]", "setFocus"), session.actions)
+        self.assertEqual(session._elements["wnd[0]/usr/lbl[43,6]"].caretPosition, 3)
+
+    def test_sends_f4_to_open_file_browser(self):
+        session = self._ejecutar()
+        self.assertIn(("wnd[1]", "sendVKey", 4), session.actions)
+
+    def test_sets_path_and_filename_in_browser(self):
+        session = self._ejecutar()
+        self.assertEqual(session._elements["wnd[2]/usr/ctxtDY_PATH"].text, self.CARPETA)
+        filename_field = session._elements["wnd[2]/usr/ctxtDY_FILENAME"]
+        self.assertEqual(filename_field.text, self.NOMBRE)
+        self.assertEqual(filename_field.caretPosition, len(self.NOMBRE))
+
+    def test_confirms_dialogs_back_and_saves(self):
+        session = self._ejecutar()
+        self.assertIn(("wnd[2]/tbar[0]/btn[0]", "press"), session.actions)
+        self.assertIn(("wnd[1]/tbar[0]/btn[0]", "press"), session.actions)
         self.assertIn(("wnd[0]/tbar[0]/btn[3]", "press"), session.actions)
+        self.assertIn(("wnd[1]/usr/btnSPOP-OPTION1", "press"), session.actions)
+
+    def test_actions_in_correct_sequence(self):
+        session = self._ejecutar()
+        # Verificar el orden parcial: F2 → btn[25] → btn[27] → F4 → OK explorador
+        order = [
+            a for a in session.actions
+            if a in [
+                ("wnd[0]", "sendVKey", 2),
+                ("wnd[0]/tbar[1]/btn[25]", "press"),
+                ("wnd[0]/tbar[1]/btn[27]", "press"),
+                ("wnd[1]", "sendVKey", 4),
+                ("wnd[2]/tbar[0]/btn[0]", "press"),
+                ("wnd[1]/usr/btnSPOP-OPTION1", "press"),
+            ]
+        ]
+        self.assertEqual(order, [
+            ("wnd[0]", "sendVKey", 2),
+            ("wnd[0]/tbar[1]/btn[25]", "press"),
+            ("wnd[0]/tbar[1]/btn[27]", "press"),
+            ("wnd[1]", "sendVKey", 4),
+            ("wnd[2]/tbar[0]/btn[0]", "press"),
+            ("wnd[1]/usr/btnSPOP-OPTION1", "press"),
+        ])
 
 
 class StepAssignFilesTest(unittest.TestCase):
@@ -429,17 +454,22 @@ class ProcessBdcSessionTest(unittest.TestCase):
 
 
 class RunLsmwFlowTest(unittest.TestCase):
+    CARPETA = r"C:\test\salida"
+    NOMBRE = "LSMW_test.txt"
+
     def test_calls_all_steps_in_order(self):
         session = MockSAPSession()
         call_order = []
 
-        def make_recorder(name):
+        def make_recorder(name, accepts_path=False):
+            if accepts_path:
+                return lambda s, c, n: call_order.append((name, c, n))
             return lambda s: call_order.append(name)
 
         with patch.multiple(
             "sap_upload",
             open_lsmw=make_recorder("open_lsmw"),
-            step_specify_files=make_recorder("specify_files"),
+            configurar_ruta_archivo=make_recorder("configurar_ruta", accepts_path=True),
             step_assign_files=make_recorder("assign_files"),
             step_read_data=make_recorder("read_data"),
             step_display_read_data=make_recorder("display_read"),
@@ -449,13 +479,13 @@ class RunLsmwFlowTest(unittest.TestCase):
             step_run_batch_input=make_recorder("run_bi"),
             process_bdc_session=make_recorder("process_bdc"),
         ):
-            run_lsmw_flow(session)
+            run_lsmw_flow(session, self.CARPETA, self.NOMBRE)
 
         self.assertEqual(
             call_order,
             [
                 "open_lsmw",
-                "specify_files",
+                ("configurar_ruta", self.CARPETA, self.NOMBRE),
                 "assign_files",
                 "read_data",
                 "display_read",
@@ -469,11 +499,10 @@ class RunLsmwFlowTest(unittest.TestCase):
 
     def test_passes_session_to_each_step(self):
         session = MockSAPSession()
-        spies = {
+        single_arg_spies = {
             name: MagicMock()
             for name in [
                 "open_lsmw",
-                "step_specify_files",
                 "step_assign_files",
                 "step_read_data",
                 "step_display_read_data",
@@ -484,11 +513,17 @@ class RunLsmwFlowTest(unittest.TestCase):
                 "process_bdc_session",
             ]
         }
-        with patch.multiple("sap_upload", **spies):
-            run_lsmw_flow(session)
+        configurar_spy = MagicMock()
+        with patch.multiple(
+            "sap_upload",
+            configurar_ruta_archivo=configurar_spy,
+            **single_arg_spies,
+        ):
+            run_lsmw_flow(session, self.CARPETA, self.NOMBRE)
 
-        for name, spy in spies.items():
+        for spy in single_arg_spies.values():
             spy.assert_called_once_with(session)
+        configurar_spy.assert_called_once_with(session, self.CARPETA, self.NOMBRE)
 
 
 # ---------------------------------------------------------------------------
@@ -504,35 +539,32 @@ class MainEntryPointTest(unittest.TestCase):
     def test_returns_1_when_sap_session_fails(self):
         fake_path = Path("/tmp/fake.txt")
         with patch("sap_upload.get_latest_txt", return_value=fake_path), \
-             patch("sap_upload.SAP_LSMW_INPUT_PATH", None), \
              patch("sap_upload.get_sap_session", side_effect=RuntimeError("no SAP")):
             self.assertEqual(sap_upload.main(), 1)
 
     def test_returns_0_on_happy_path(self):
-        fake_path = Path("/tmp/fake.txt")
+        fake_path = Path("/tmp/LSMW_x.txt")
         session = MagicMock()
         with patch("sap_upload.get_latest_txt", return_value=fake_path), \
-             patch("sap_upload.SAP_LSMW_INPUT_PATH", None), \
              patch("sap_upload.get_sap_session", return_value=session), \
              patch("sap_upload.run_lsmw_flow") as mock_flow:
             self.assertEqual(sap_upload.main(), 0)
-            mock_flow.assert_called_once_with(session)
+            mock_flow.assert_called_once_with(session, str(fake_path.parent), fake_path.name)
 
-    def test_copies_to_sap_path_when_configured(self):
-        fake_path = Path("/tmp/fake.txt")
-        session = MagicMock()
+    def test_passes_folder_and_filename_to_flow(self):
+        fake_path = Path("/some/folder/LSMW_20260510_094838.txt")
         with patch("sap_upload.get_latest_txt", return_value=fake_path), \
-             patch("sap_upload.SAP_LSMW_INPUT_PATH", r"C:\sap\input.txt"), \
-             patch("sap_upload.copy_to_sap_path") as mock_copy, \
-             patch("sap_upload.get_sap_session", return_value=session), \
-             patch("sap_upload.run_lsmw_flow"):
-            self.assertEqual(sap_upload.main(), 0)
-            mock_copy.assert_called_once_with(fake_path, r"C:\sap\input.txt")
+             patch("sap_upload.get_sap_session", return_value=MagicMock()), \
+             patch("sap_upload.run_lsmw_flow") as mock_flow:
+            sap_upload.main()
+            mock_flow.assert_called_once()
+            args = mock_flow.call_args[0]
+            self.assertEqual(args[1], "/some/folder")
+            self.assertEqual(args[2], "LSMW_20260510_094838.txt")
 
     def test_returns_1_when_lsmw_flow_raises(self):
         fake_path = Path("/tmp/fake.txt")
         with patch("sap_upload.get_latest_txt", return_value=fake_path), \
-             patch("sap_upload.SAP_LSMW_INPUT_PATH", None), \
              patch("sap_upload.get_sap_session", return_value=MagicMock()), \
              patch("sap_upload.run_lsmw_flow", side_effect=Exception("falla")):
             self.assertEqual(sap_upload.main(), 1)

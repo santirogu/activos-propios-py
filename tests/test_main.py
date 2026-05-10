@@ -165,10 +165,8 @@ class SubirASapTest(unittest.TestCase):
         """
         self.mocks = {
             "get_latest_txt": MagicMock(return_value=Path("/tmp/LSMW_x.txt")),
-            "copy_to_sap_path": MagicMock(),
             "get_sap_session": MagicMock(return_value=MagicMock(name="session")),
             "run_lsmw_flow": MagicMock(),
-            "SAP_LSMW_INPUT_PATH": None,
         }
         self.mocks.update(overrides)
         return patch.multiple("sap_upload", **self.mocks)
@@ -211,10 +209,12 @@ class SubirASapTest(unittest.TestCase):
 
     def test_worker_calls_full_flow_on_happy_path(self) -> None:
         session = MagicMock(name="session")
+        fake_path = Path("/tmp/LSMW_test.txt")
         with patch("main.messagebox.askyesno", return_value=True), \
              patch("main.messagebox.showinfo") as mock_info, \
              patch("main.threading.Thread", _SyncFakeThread), \
              self._patch_sap_upload(
+                 get_latest_txt=MagicMock(return_value=fake_path),
                  get_sap_session=MagicMock(return_value=session),
                  run_lsmw_flow=MagicMock(),
              ):
@@ -222,7 +222,9 @@ class SubirASapTest(unittest.TestCase):
 
         self.mocks["get_latest_txt"].assert_called_once()
         self.mocks["get_sap_session"].assert_called_once()
-        self.mocks["run_lsmw_flow"].assert_called_once_with(session)
+        self.mocks["run_lsmw_flow"].assert_called_once_with(
+            session, str(fake_path.parent), fake_path.name
+        )
         mock_info.assert_called_once()
 
     def test_worker_reenables_button_after_success(self) -> None:
@@ -243,27 +245,19 @@ class SubirASapTest(unittest.TestCase):
 
         self.assertIn("completada", self.status_var.get().lower())
 
-    def test_worker_skips_copy_when_sap_path_not_configured(self) -> None:
-        with patch("main.messagebox.askyesno", return_value=True), \
-             patch("main.messagebox.showinfo"), \
-             patch("main.threading.Thread", _SyncFakeThread), \
-             self._patch_sap_upload(SAP_LSMW_INPUT_PATH=None):
-            subir_a_sap(self.root, self.status_var, self.button)
-
-        self.mocks["copy_to_sap_path"].assert_not_called()
-
-    def test_worker_copies_to_sap_path_when_configured(self) -> None:
-        fake_path = Path("/tmp/LSMW_x.txt")
+    def test_worker_passes_folder_and_filename_to_run_lsmw_flow(self) -> None:
+        fake_path = Path("/some/folder/LSMW_20260510_094838.txt")
         with patch("main.messagebox.askyesno", return_value=True), \
              patch("main.messagebox.showinfo"), \
              patch("main.threading.Thread", _SyncFakeThread), \
              self._patch_sap_upload(
                  get_latest_txt=MagicMock(return_value=fake_path),
-                 SAP_LSMW_INPUT_PATH=r"C:\sap\input.txt",
              ):
             subir_a_sap(self.root, self.status_var, self.button)
 
-        self.mocks["copy_to_sap_path"].assert_called_once_with(fake_path, r"C:\sap\input.txt")
+        run_flow_call = self.mocks["run_lsmw_flow"].call_args
+        self.assertEqual(run_flow_call[0][1], "/some/folder")
+        self.assertEqual(run_flow_call[0][2], "LSMW_20260510_094838.txt")
 
     # ----------------------------------------------------------------- errores
 
