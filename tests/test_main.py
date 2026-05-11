@@ -245,6 +245,134 @@ class ExtraerLsmwATxtTest(unittest.TestCase):
         mock_ask.assert_not_called()
 
 
+class ExtraerLsmwATxtErrorPathsTest(unittest.TestCase):
+    """Verifica que toda excepción durante la extracción se muestre al usuario."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.status_var = tk.StringVar(master=self.root)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_salida = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+        self.root.destroy()
+
+    def test_shows_error_when_excel_file_not_found(self) -> None:
+        with patch("main.OUTPUT_DIR", self.tmp_salida), \
+             patch(
+                 "main.export_sheet_to_tsv",
+                 side_effect=FileNotFoundError("Excel no existe"),
+             ), \
+             patch("main.messagebox.showerror") as mock_err, \
+             patch("main.messagebox.showinfo"):
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        mock_err.assert_called_once()
+        title, message = mock_err.call_args[0][:2]
+        self.assertEqual(title, "Archivo no encontrado")
+        self.assertIn("Excel no existe", message)
+
+    def test_shows_error_when_sheet_not_found(self) -> None:
+        with patch("main.OUTPUT_DIR", self.tmp_salida), \
+             patch(
+                 "main.export_sheet_to_tsv",
+                 side_effect=ValueError("Hoja no existe"),
+             ), \
+             patch("main.messagebox.showerror") as mock_err, \
+             patch("main.messagebox.showinfo"):
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        mock_err.assert_called_once()
+        title, message = mock_err.call_args[0][:2]
+        self.assertEqual(title, "Hoja no encontrada")
+        self.assertIn("Hoja no existe", message)
+
+    def test_shows_error_on_generic_export_failure(self) -> None:
+        with patch("main.OUTPUT_DIR", self.tmp_salida), \
+             patch(
+                 "main.export_sheet_to_tsv",
+                 side_effect=RuntimeError("disco lleno"),
+             ), \
+             patch("main.messagebox.showerror") as mock_err, \
+             patch("main.messagebox.showinfo"):
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        mock_err.assert_called_once()
+        title, message = mock_err.call_args[0][:2]
+        self.assertEqual(title, "Error al exportar")
+        self.assertIn("disco lleno", message)
+
+    def test_shows_error_on_unexpected_glob_failure(self) -> None:
+        # Si OUTPUT_DIR.glob() falla (permisos, path inválido, etc.), la
+        # red de seguridad de _show_unexpected_error debe mostrar el error.
+        fake_output_dir = MagicMock()
+        fake_output_dir.exists.return_value = True
+        fake_output_dir.glob.side_effect = OSError("permiso denegado")
+
+        with patch("main.OUTPUT_DIR", fake_output_dir), \
+             patch("main.messagebox.showerror") as mock_err:
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        mock_err.assert_called_once()
+        title, message = mock_err.call_args[0][:2]
+        self.assertEqual(title, "Error inesperado al extraer")
+        self.assertIn("permiso denegado", message)
+        # El mensaje debe incluir el traceback para diagnóstico
+        self.assertIn("--- Detalle técnico ---", message)
+
+
+class ShowUnexpectedErrorTest(unittest.TestCase):
+    """_show_unexpected_error muestra dialog + log con traceback."""
+
+    def test_displays_messagebox_with_exception_details(self) -> None:
+        try:
+            raise RuntimeError("algo falló")
+        except RuntimeError as exc:
+            with patch("main.messagebox.showerror") as mock_err:
+                main._show_unexpected_error("Título de prueba", exc)
+
+        mock_err.assert_called_once()
+        title, message = mock_err.call_args[0][:2]
+        self.assertEqual(title, "Título de prueba")
+        self.assertIn("RuntimeError", message)
+        self.assertIn("algo falló", message)
+        self.assertIn("--- Detalle técnico ---", message)
+
+
+class InstallTkExceptionHandlerTest(unittest.TestCase):
+    """_install_tk_exception_handler reemplaza el handler default por uno
+    que muestra diálogos en vez de imprimir silenciosamente a stderr."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_sets_report_callback_exception_attribute(self) -> None:
+        original_handler = self.root.report_callback_exception
+        main._install_tk_exception_handler(self.root)
+        self.assertIsNot(self.root.report_callback_exception, original_handler)
+        self.assertTrue(callable(self.root.report_callback_exception))
+
+    def test_handler_shows_dialog_when_invoked(self) -> None:
+        main._install_tk_exception_handler(self.root)
+        try:
+            raise ValueError("uncaught en callback")
+        except ValueError:
+            with patch("main.messagebox.showerror") as mock_err:
+                self.root.report_callback_exception(*sys.exc_info())
+
+        mock_err.assert_called_once()
+        title, message = mock_err.call_args[0][:2]
+        self.assertEqual(title, "Error inesperado")
+        self.assertIn("ValueError", message)
+        self.assertIn("uncaught en callback", message)
+
+
 class _SyncFakeThread:
     """Reemplaza threading.Thread para ejecutar el target de forma síncrona."""
 
@@ -268,8 +396,16 @@ class SubirASapTest(unittest.TestCase):
         self.root.after = lambda delay, fn, *args: fn(*args)
         self.status_var = tk.StringVar(master=self.root)
         self.button = tk.Button(self.root)
+        # Por defecto los tests asumen que hay .txt en salida/ (para que tras
+        # completar el flujo el botón quede "normal"). Tests específicos
+        # pueden sobreescribir el patch.
+        self._hay_txt_patcher = patch("main._hay_txt_en_salida", return_value=True)
+        self._hay_txt_patcher.start()
+        main._upload_en_curso = False
 
     def tearDown(self) -> None:
+        self._hay_txt_patcher.stop()
+        main._upload_en_curso = False
         self.root.destroy()
 
     def _patch_sap_upload(self, **overrides):
@@ -428,6 +564,181 @@ class SubirASapTest(unittest.TestCase):
             subir_a_sap(self.root, self.status_var, self.button)
 
         self.assertEqual(self.status_var.get(), "")
+
+
+# ---------------------------------------------------------------------------
+# Estado dinámico del botón "Subir a SAP"
+# ---------------------------------------------------------------------------
+
+
+class HayTxtEnSalidaTest(unittest.TestCase):
+    """Helper que detecta archivos LSMW_*.txt en salida/."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_salida = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_returns_false_when_directory_missing(self) -> None:
+        with patch("main.OUTPUT_DIR", Path("/no/existe")):
+            self.assertFalse(main._hay_txt_en_salida())
+
+    def test_returns_false_when_directory_empty(self) -> None:
+        with patch("main.OUTPUT_DIR", self.tmp_salida):
+            self.assertFalse(main._hay_txt_en_salida())
+
+    def test_returns_true_when_lsmw_txt_present(self) -> None:
+        (self.tmp_salida / "LSMW_20260101_120000.txt").write_text("x", encoding="utf-8")
+        with patch("main.OUTPUT_DIR", self.tmp_salida):
+            self.assertTrue(main._hay_txt_en_salida())
+
+    def test_returns_false_when_only_non_lsmw_files(self) -> None:
+        (self.tmp_salida / "otro.txt").write_text("x", encoding="utf-8")
+        (self.tmp_salida / "README.md").write_text("x", encoding="utf-8")
+        with patch("main.OUTPUT_DIR", self.tmp_salida):
+            self.assertFalse(main._hay_txt_en_salida())
+
+
+class RefrescarEstadoBotonSubirTest(unittest.TestCase):
+    """_refrescar_estado_boton_subir sincroniza el botón con salida/."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.button = tk.Button(self.root)
+        main._upload_en_curso = False
+
+    def tearDown(self) -> None:
+        main._upload_en_curso = False
+        self.root.destroy()
+
+    def test_enables_button_when_txt_exists(self) -> None:
+        self.button.config(state="disabled")
+        with patch("main._hay_txt_en_salida", return_value=True):
+            main._refrescar_estado_boton_subir(self.button)
+        self.assertEqual(str(self.button["state"]), "normal")
+
+    def test_disables_button_when_no_txt(self) -> None:
+        self.button.config(state="normal")
+        with patch("main._hay_txt_en_salida", return_value=False):
+            main._refrescar_estado_boton_subir(self.button)
+        self.assertEqual(str(self.button["state"]), "disabled")
+
+    def test_skips_when_upload_in_progress(self) -> None:
+        self.button.config(state="disabled")
+        main._upload_en_curso = True
+        with patch("main._hay_txt_en_salida", return_value=True):
+            main._refrescar_estado_boton_subir(self.button)
+        # Botón sigue deshabilitado pese a que hay archivo, porque
+        # el worker controla el estado durante el upload.
+        self.assertEqual(str(self.button["state"]), "disabled")
+
+
+class PollEstadoBotonSubirTest(unittest.TestCase):
+    """_poll_estado_boton_subir refresca y re-programa cada intervalo."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.button = tk.Button(self.root)
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_calls_refresh_and_schedules_next_poll(self) -> None:
+        self.root.after = MagicMock()
+        with patch("main._refrescar_estado_boton_subir") as mock_refresh:
+            main._poll_estado_boton_subir(self.root, self.button)
+
+        mock_refresh.assert_called_once_with(self.button)
+        self.root.after.assert_called_once()
+        scheduled_delay = self.root.after.call_args[0][0]
+        self.assertEqual(scheduled_delay, main._POLL_INTERVAL_MS)
+
+
+class SubirASapFlagTest(unittest.TestCase):
+    """Verifica que _upload_en_curso se gestiona correctamente."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.root.after = lambda delay, fn, *args: fn(*args)
+        self.status_var = tk.StringVar(master=self.root)
+        self.button = tk.Button(self.root)
+        self._hay_txt_patcher = patch("main._hay_txt_en_salida", return_value=True)
+        self._hay_txt_patcher.start()
+        main._upload_en_curso = False
+
+    def tearDown(self) -> None:
+        self._hay_txt_patcher.stop()
+        main._upload_en_curso = False
+        self.root.destroy()
+
+    def _patch_sap_upload(self, **overrides):
+        defaults = {
+            "get_latest_txt": MagicMock(return_value=Path("/tmp/LSMW_x.txt")),
+            "get_sap_session": MagicMock(return_value=MagicMock()),
+            "run_lsmw_flow": MagicMock(),
+        }
+        defaults.update(overrides)
+        return patch.multiple("sap_upload", **defaults)
+
+    def test_flag_is_true_during_worker_execution(self) -> None:
+        captured = []
+
+        def capture_flag(*args, **kwargs):
+            captured.append(main._upload_en_curso)
+
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             self._patch_sap_upload(run_lsmw_flow=MagicMock(side_effect=capture_flag)):
+            subir_a_sap(self.root, self.status_var, self.button)
+
+        self.assertEqual(captured, [True])
+
+    def test_flag_is_false_after_successful_upload(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             self._patch_sap_upload():
+            subir_a_sap(self.root, self.status_var, self.button)
+
+        self.assertFalse(main._upload_en_curso)
+
+    def test_flag_is_false_after_lsmw_flow_error(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showerror"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             self._patch_sap_upload(
+                 run_lsmw_flow=MagicMock(side_effect=Exception("falla"))
+             ):
+            subir_a_sap(self.root, self.status_var, self.button)
+
+        self.assertFalse(main._upload_en_curso)
+
+    def test_flag_not_set_when_user_cancels(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=False):
+            subir_a_sap(self.root, self.status_var, self.button)
+
+        self.assertFalse(main._upload_en_curso)
+
+    def test_button_disabled_after_upload_when_no_txt_remains(self) -> None:
+        # Simula que al final del flujo el .txt fue borrado/no existe.
+        self._hay_txt_patcher.stop()
+        with patch("main._hay_txt_en_salida", return_value=False), \
+             patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             self._patch_sap_upload():
+            subir_a_sap(self.root, self.status_var, self.button)
+
+        self.assertEqual(str(self.button["state"]), "disabled")
+        # Restaurar el patcher para que tearDown no falle
+        self._hay_txt_patcher = patch("main._hay_txt_en_salida", return_value=True)
+        self._hay_txt_patcher.start()
 
 
 if __name__ == "__main__":

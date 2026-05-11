@@ -71,6 +71,7 @@ python src/main.py
 
 ### Botón "Subir a SAP"
 
+- **Arranca deshabilitado.** Se habilita automáticamente cuando detecta un `LSMW_*.txt` en `salida/` (polling cada 1 segundo). Si la carpeta queda vacía, vuelve a deshabilitarse.
 - Pide confirmación antes de ejecutar (operación sensible que toma control de SAP).
 - Toma el `.txt` más reciente de `salida/`.
 - Conecta a la sesión SAP abierta vía SAP GUI Scripting (COM).
@@ -84,6 +85,20 @@ También se puede ejecutar la carga sin GUI:
 ```bash
 python src/sap_upload.py
 ```
+
+### Debugging y logs
+
+La app imprime logs con timestamp `[HH:MM:SS]` cada vez que se presiona un botón, describe lo que está haciendo (validaciones, archivos previos, extracción, etc.). Para verlos en tiempo real, ejecutar desde un terminal:
+
+```bash
+python src/main.py
+```
+
+Si algo falla inesperadamente (permisos, archivo bloqueado en Excel, IDs SAP que no calzan), la app:
+- Muestra un diálogo con el tipo de error y el traceback completo.
+- Imprime el traceback en consola para diagnóstico detallado.
+
+Esto aplica tanto para excepciones manejadas (`FileNotFoundError`, `ValueError`, `OSError`) como para cualquier error no previsto — gracias a un handler global de excepciones de Tkinter (`root.report_callback_exception`).
 
 ### Notas sobre los datos exportados
 
@@ -124,9 +139,9 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **64 pruebas** distribuidas en dos archivos:
+La suite contiene **84 pruebas** distribuidas en dos archivos:
 
-#### `tests/test_main.py` (28 pruebas)
+#### `tests/test_main.py` (48 pruebas)
 
 **`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
 
@@ -143,6 +158,20 @@ La suite contiene **64 pruebas** distribuidas en dos archivos:
 | `test_no_keeps_existing_and_does_not_extract` | NO → no borra, no extrae, no muestra mensaje de éxito |
 | `test_no_updates_status_with_cancellation_message` | NO → status_var con texto de cancelación |
 | `test_ignores_non_lsmw_files_when_checking_existing` | Archivos que no son `LSMW_*.txt` no disparan el diálogo |
+
+**`ExtraerLsmwATxtErrorPathsTest`** (4 pruebas) — verifica que toda excepción durante la extracción se muestra al usuario: `FileNotFoundError` (Excel ausente), `ValueError` (hoja ausente), excepción genérica del export, y la red de seguridad para errores inesperados (ej. `OUTPUT_DIR.glob` falla por permisos) que muestra el traceback en el diálogo.
+
+**`ShowUnexpectedErrorTest`** (1 prueba) — `_show_unexpected_error` muestra messagebox con tipo, mensaje y traceback completo de la excepción.
+
+**`InstallTkExceptionHandlerTest`** (2 pruebas) — `_install_tk_exception_handler` reemplaza `root.report_callback_exception`; al invocar el handler se muestra un diálogo en vez de imprimir silenciosamente a stderr.
+
+**`HayTxtEnSalidaTest`** (4 pruebas) — detección de `.txt` en `salida/`: directorio inexistente, vacío, con `LSMW_*.txt`, con archivos no-LSMW.
+
+**`RefrescarEstadoBotonSubirTest`** (3 pruebas) — habilita/deshabilita el botón "Subir a SAP" según presencia de `.txt`; respeta el flag `_upload_en_curso` para no interferir con el worker.
+
+**`PollEstadoBotonSubirTest`** (1 prueba) — el polling refresca y se re-programa cada `_POLL_INTERVAL_MS`.
+
+**`SubirASapFlagTest`** (5 pruebas) — gestión correcta del flag `_upload_en_curso`: True durante el worker, False tras éxito o error, no se setea si el usuario cancela, botón queda disabled si `salida/` queda vacía tras el upload.
 
 **`SubirASapTest`** (11 pruebas) — handler del botón "Subir a SAP":
 
