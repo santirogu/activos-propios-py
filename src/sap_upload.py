@@ -42,6 +42,7 @@ El script:
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 
@@ -68,6 +69,20 @@ BDC_SESSION_TABLE = (
     "wnd[0]/usr/tabsD1000_TABSTRIP/tabpALLE/"
     "ssubD1000_SUBSCREEN:SAPMSBDC_CC:1010/tblSAPMSBDC_CCTC_APQI"
 )
+
+
+# ---------------------------------------------------------------------------
+# LOGGING
+# ---------------------------------------------------------------------------
+
+def _log(mensaje: str) -> None:
+    """Imprime un mensaje con timestamp para seguimiento de la ejecución.
+
+    Usa flush=True para que el log aparezca en tiempo real aunque stdout
+    esté redirigido o la consola lo esté bufferizando.
+    """
+    ts = time.strftime("%H:%M:%S")
+    print(f"[{ts}] {mensaje}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +159,7 @@ def select_step_row(session, row: int) -> None:
 
 def open_lsmw(session) -> None:
     """Abre la T-code LSMW y ejecuta el proyecto pre-cargado."""
+    _log("Paso 1/10: Abriendo transacción LSMW y proyecto pre-cargado...")
     session.findById("wnd[0]").maximize()
     session.findById("wnd[0]/tbar[0]/okcd").text = "LSMW"
     session.findById("wnd[0]").sendVKey(0)
@@ -163,6 +179,7 @@ def configurar_ruta_archivo(session, carpeta: str, nombre_archivo: str) -> None:
         carpeta: ruta absoluta de la carpeta (ej. r"C:\\Users\\xxx\\salida").
         nombre_archivo: nombre del archivo (ej. "LSMW_20260510_094838.txt").
     """
+    _log(f"Paso 2/10: Configurando ruta del archivo en LSMW → {carpeta}\\{nombre_archivo}")
     # Foco en la celda del paso "Specify Files" (row 6) y F2 para abrirlo
     cell_id = f"{LSMW_STEPLIST_TABLE}/txtGT_STEPLIST-STEPTEXT[0,{SPECIFY_FILES_ROW}]"
     cell = session.findById(cell_id)
@@ -201,6 +218,7 @@ def configurar_ruta_archivo(session, carpeta: str, nombre_archivo: str) -> None:
 
 def step_assign_files(session) -> None:
     """Abre y cierra el paso "Assign Files"."""
+    _log("Paso 3/10: Asignando archivo a estructura (Assign Files)...")
     select_step_row(session, ASSIGN_FILES_ROW)
     session.findById("wnd[0]/tbar[1]/btn[32]").press()
     session.findById("wnd[0]").sendVKey(3)              # F3 — Back
@@ -208,6 +226,7 @@ def step_assign_files(session) -> None:
 
 def step_read_data(session) -> None:
     """Ejecuta el paso "Read Data" — lee el .txt desde la ruta configurada."""
+    _log("Paso 4/10: Leyendo datos del archivo .txt (Read Data)...")
     select_step_row(session, READ_DATA_ROW)
     session.findById("wnd[0]/tbar[1]/btn[32]").press()
     session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8 — ejecutar lectura
@@ -217,6 +236,7 @@ def step_read_data(session) -> None:
 
 def step_display_read_data(session) -> None:
     """Paso "Display Read Data" — confirma popup y vuelve."""
+    _log("Paso 5/10: Verificando datos leídos (Display Read Data)...")
     session.findById("wnd[0]/tbar[1]/btn[32]").press()
     session.findById("wnd[1]").sendVKey(0)              # Confirma popup
     session.findById("wnd[0]").sendVKey(3)
@@ -224,6 +244,7 @@ def step_display_read_data(session) -> None:
 
 def step_convert_data(session) -> None:
     """Paso "Convert Data" — convierte los datos leídos."""
+    _log("Paso 6/10: Convirtiendo datos al formato SAP (Convert Data)...")
     session.findById("wnd[0]/tbar[1]/btn[32]").press()
     session.findById("wnd[0]").sendVKey(8)              # F8 — ejecutar conversión
     session.findById("wnd[0]").sendVKey(3)
@@ -232,6 +253,7 @@ def step_convert_data(session) -> None:
 
 def step_display_converted_data(session) -> None:
     """Paso "Display Converted Data" — confirma popup y vuelve."""
+    _log("Paso 7/10: Verificando datos convertidos (Display Converted Data)...")
     session.findById("wnd[0]/tbar[1]/btn[32]").press()
     session.findById("wnd[1]").sendVKey(0)
     session.findById("wnd[0]").sendVKey(3)
@@ -239,6 +261,7 @@ def step_display_converted_data(session) -> None:
 
 def step_create_batch_input(session) -> None:
     """Paso "Create Batch Input Session" — marca P_KEEP y crea la sesión."""
+    _log("Paso 8/10: Creando sesión Batch Input (Create BI Session)...")
     session.findById("wnd[0]/tbar[1]/btn[32]").press()
     keep_checkbox = session.findById("wnd[0]/usr/chkP_KEEP")
     keep_checkbox.selected = True
@@ -249,11 +272,13 @@ def step_create_batch_input(session) -> None:
 
 def step_run_batch_input(session) -> None:
     """Paso "Run Batch Input Session" — abre el listado de sesiones BDC."""
+    _log("Paso 9/10: Abriendo lista de sesiones BDC (Run BI Session)...")
     session.findById("wnd[0]/tbar[1]/btn[32]").press()
 
 
 def process_bdc_session(session) -> None:
     """Procesa la sesión BDC recién creada en modo error + log completo."""
+    _log("Paso 10/10: Procesando sesión BDC en modo error + log completo...")
     table = session.findById(BDC_SESSION_TABLE)
     table.getAbsoluteRow(0).selected = True
 
@@ -282,6 +307,8 @@ def run_lsmw_flow(session, carpeta: str, nombre_archivo: str) -> None:
         carpeta: ruta absoluta de la carpeta donde está el .txt.
         nombre_archivo: nombre del archivo .txt a cargar.
     """
+    inicio = time.monotonic()
+    _log("=== Iniciando flujo LSMW (10 pasos) ===")
     open_lsmw(session)
     configurar_ruta_archivo(session, carpeta, nombre_archivo)
     step_assign_files(session)
@@ -292,6 +319,8 @@ def run_lsmw_flow(session, carpeta: str, nombre_archivo: str) -> None:
     step_create_batch_input(session)
     step_run_batch_input(session)
     process_bdc_session(session)
+    duracion = time.monotonic() - inicio
+    _log(f"=== Flujo LSMW finalizado en {duracion:.1f}s ===")
 
 
 # ---------------------------------------------------------------------------
@@ -299,40 +328,43 @@ def run_lsmw_flow(session, carpeta: str, nombre_archivo: str) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    print("=" * 70)
-    print("Carga automatizada del .txt a SAP vía LSMW")
-    print("=" * 70)
+    print("=" * 70, flush=True)
+    print("Carga automatizada del .txt a SAP vía LSMW", flush=True)
+    print("=" * 70, flush=True)
 
+    _log("Buscando el archivo .txt más reciente en salida/...")
     try:
         latest = get_latest_txt()
     except FileNotFoundError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"ERROR: {exc}", file=sys.stderr, flush=True)
         return 1
-    print(f"Archivo origen: {latest}")
+    _log(f"Archivo encontrado: {latest.name}")
 
+    _log("Conectando a la sesión SAP abierta...")
     try:
         session = get_sap_session()
     except RuntimeError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"ERROR: {exc}", file=sys.stderr, flush=True)
         return 1
-    print("Conectado a SAP. Ejecutando flujo LSMW...")
+    _log("Sesión SAP obtenida correctamente.")
 
     try:
         run_lsmw_flow(session, str(latest.parent), latest.name)
     except Exception as exc:
-        print(f"\nERROR durante el flujo LSMW: {exc}", file=sys.stderr)
+        print(f"\nERROR durante el flujo LSMW: {exc}", file=sys.stderr, flush=True)
         print(
             "Revisa la pantalla de SAP para ver en qué paso se detuvo. "
             "Posibles causas: proyecto LSMW no pre-cargado, IDs de la pantalla "
             "distintos, definición de archivo en otra posición.",
             file=sys.stderr,
+            flush=True,
         )
         return 1
 
-    print()
-    print("=" * 70)
-    print("Carga completada. Revisa SM35 para ver el log de la sesión BDC.")
-    print("=" * 70)
+    print(flush=True)
+    print("=" * 70, flush=True)
+    print("Carga completada. Revisa SM35 para ver el log de la sesión BDC.", flush=True)
+    print("=" * 70, flush=True)
     return 0
 
 
