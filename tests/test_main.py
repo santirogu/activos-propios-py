@@ -130,6 +130,121 @@ class RealWorkbookSmokeTest(unittest.TestCase):
         self.assertEqual(first_line.count("\t"), 50)
 
 
+class ExtraerLsmwATxtTest(unittest.TestCase):
+    """Pruebas para el handler del botón "Extraer información en txt" — en
+    particular la lógica de confirmar antes de reemplazar un .txt existente.
+    """
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.status_var = tk.StringVar(master=self.root)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_salida = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+        self.root.destroy()
+
+    def _patch_output_dir(self):
+        return patch("main.OUTPUT_DIR", self.tmp_salida)
+
+    def test_proceeds_directly_when_no_existing_txt(self) -> None:
+        with self._patch_output_dir(), \
+             patch("main.export_sheet_to_tsv", return_value=(self.tmp_salida / "new.txt", 2)) as mock_export, \
+             patch("main.messagebox.askyesno") as mock_ask, \
+             patch("main.messagebox.showinfo"):
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        mock_ask.assert_not_called()
+        mock_export.assert_called_once()
+
+    def test_asks_for_replacement_when_txt_exists(self) -> None:
+        (self.tmp_salida / "LSMW_20260101_120000.txt").write_text("x", encoding="utf-8")
+
+        with self._patch_output_dir(), \
+             patch("main.export_sheet_to_tsv", return_value=(self.tmp_salida / "new.txt", 2)), \
+             patch("main.messagebox.askyesno", return_value=True) as mock_ask, \
+             patch("main.messagebox.showinfo"):
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        mock_ask.assert_called_once()
+        # El mensaje debe mencionar el archivo existente
+        args = mock_ask.call_args[0]
+        self.assertIn("LSMW_20260101_120000.txt", args[1])
+
+    def test_yes_deletes_existing_and_creates_new(self) -> None:
+        old_file = self.tmp_salida / "LSMW_20260101_120000.txt"
+        old_file.write_text("contenido viejo", encoding="utf-8")
+
+        with self._patch_output_dir(), \
+             patch("main.export_sheet_to_tsv", return_value=(self.tmp_salida / "new.txt", 2)) as mock_export, \
+             patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"):
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        self.assertFalse(old_file.exists())
+        mock_export.assert_called_once()
+
+    def test_yes_deletes_all_existing_txt_files(self) -> None:
+        files = [
+            self.tmp_salida / "LSMW_20260101_120000.txt",
+            self.tmp_salida / "LSMW_20260102_120000.txt",
+            self.tmp_salida / "LSMW_20260103_120000.txt",
+        ]
+        for f in files:
+            f.write_text("x", encoding="utf-8")
+
+        with self._patch_output_dir(), \
+             patch("main.export_sheet_to_tsv", return_value=(self.tmp_salida / "new.txt", 2)), \
+             patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"):
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        for f in files:
+            self.assertFalse(f.exists(), f"{f.name} debió ser borrado")
+
+    def test_no_keeps_existing_and_does_not_extract(self) -> None:
+        old_file = self.tmp_salida / "LSMW_20260101_120000.txt"
+        old_file.write_text("contenido viejo", encoding="utf-8")
+
+        with self._patch_output_dir(), \
+             patch("main.export_sheet_to_tsv") as mock_export, \
+             patch("main.messagebox.askyesno", return_value=False), \
+             patch("main.messagebox.showinfo") as mock_info:
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        self.assertTrue(old_file.exists())
+        self.assertEqual(old_file.read_text(encoding="utf-8"), "contenido viejo")
+        mock_export.assert_not_called()
+        mock_info.assert_not_called()
+
+    def test_no_updates_status_with_cancellation_message(self) -> None:
+        (self.tmp_salida / "LSMW_20260101_120000.txt").write_text("x", encoding="utf-8")
+
+        with self._patch_output_dir(), \
+             patch("main.export_sheet_to_tsv"), \
+             patch("main.messagebox.askyesno", return_value=False), \
+             patch("main.messagebox.showinfo"):
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        self.assertIn("cancelad", self.status_var.get().lower())
+        self.assertIn("conservó", self.status_var.get().lower())
+
+    def test_ignores_non_lsmw_files_when_checking_existing(self) -> None:
+        # Archivos con otro patrón no deben disparar el diálogo
+        (self.tmp_salida / "otro.txt").write_text("x", encoding="utf-8")
+        (self.tmp_salida / "README.md").write_text("x", encoding="utf-8")
+
+        with self._patch_output_dir(), \
+             patch("main.export_sheet_to_tsv", return_value=(self.tmp_salida / "new.txt", 2)), \
+             patch("main.messagebox.askyesno") as mock_ask, \
+             patch("main.messagebox.showinfo"):
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        mock_ask.assert_not_called()
+
+
 class _SyncFakeThread:
     """Reemplaza threading.Thread para ejecutar el target de forma síncrona."""
 

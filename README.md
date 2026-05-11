@@ -63,7 +63,10 @@ python src/main.py
 
 - Lee la hoja `LSMW` de `resources/Formato_Dinamico_.xlsx`.
 - Crea la carpeta `salida/` en la raíz si no existe.
-- Genera un archivo TSV con el patrón `LSMW_YYYYMMDD_HHMMSS.txt`.
+- **Si ya existe un `.txt` previo en `salida/`** muestra un diálogo SÍ/NO preguntando si reemplazarlo:
+  - **SÍ** → borra los `.txt` existentes y genera uno nuevo.
+  - **NO** → no hace nada, conserva el archivo existente.
+- Si no hay archivos previos, genera directamente un TSV con el patrón `LSMW_YYYYMMDD_HHMMSS.txt`.
 - Muestra confirmación con la cantidad de filas exportadas.
 
 ### Botón "Subir a SAP"
@@ -121,13 +124,25 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **57 pruebas** distribuidas en dos archivos:
+La suite contiene **64 pruebas** distribuidas en dos archivos:
 
-#### `tests/test_main.py` (21 pruebas)
+#### `tests/test_main.py` (28 pruebas)
 
 **`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
 
 **`RealWorkbookSmokeTest`** (1 prueba) — smoke test contra el Excel real del proyecto.
+
+**`ExtraerLsmwATxtTest`** (7 pruebas) — handler del botón "Extraer información en txt":
+
+| Test | Qué valida |
+|---|---|
+| `test_proceeds_directly_when_no_existing_txt` | Sin archivos previos → no pregunta, extrae directamente |
+| `test_asks_for_replacement_when_txt_exists` | Con archivo previo → muestra diálogo con el nombre del archivo |
+| `test_yes_deletes_existing_and_creates_new` | SÍ → borra el .txt previo y llama a `export_sheet_to_tsv` |
+| `test_yes_deletes_all_existing_txt_files` | SÍ con múltiples archivos previos → borra todos |
+| `test_no_keeps_existing_and_does_not_extract` | NO → no borra, no extrae, no muestra mensaje de éxito |
+| `test_no_updates_status_with_cancellation_message` | NO → status_var con texto de cancelación |
+| `test_ignores_non_lsmw_files_when_checking_existing` | Archivos que no son `LSMW_*.txt` no disparan el diálogo |
 
 **`SubirASapTest`** (11 pruebas) — handler del botón "Subir a SAP":
 

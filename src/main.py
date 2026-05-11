@@ -43,6 +43,33 @@ def export_sheet_to_tsv(
 
 
 def extraer_lsmw_a_txt(status_var: tk.StringVar) -> None:
+    # Si ya existe(n) .txt previo(s) en salida/, pedir confirmación antes
+    # de reemplazar.
+    existentes = (
+        sorted(OUTPUT_DIR.glob("LSMW_*.txt")) if OUTPUT_DIR.exists() else []
+    )
+    if existentes:
+        reemplazar = messagebox.askyesno(
+            "Archivo ya existente",
+            f"Ya existe un .txt generado en salida/:\n"
+            f"  {existentes[-1].name}\n\n"
+            f"¿Deseas reemplazarlo por uno nuevo?",
+        )
+        if not reemplazar:
+            status_var.set(
+                "Operación cancelada. Se conservó el archivo existente."
+            )
+            return
+        for old in existentes:
+            try:
+                old.unlink()
+            except OSError as exc:
+                messagebox.showerror(
+                    "Error al borrar archivo",
+                    f"No se pudo borrar {old.name}:\n{exc}",
+                )
+                return
+
     try:
         output_path, rows_written = export_sheet_to_tsv(
             EXCEL_PATH, SHEET_NAME, OUTPUT_DIR
