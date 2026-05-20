@@ -59,23 +59,35 @@ def _sap_com_apartment():
     en los workers de Subir a SAP / Generar Reporte SOX falla con un error
     genérico ("No se pudo conectar a SAP GUI") aunque SAP esté abierto.
 
-    No-op en sistemas sin pywin32 (Mac/Linux) — los workers fallarían de
-    todas formas por la falta de SAP, pero al menos el módulo importa.
+    Loguea cada paso (CoInitialize / CoUninitialize) para diagnosticar
+    problemas de conexión desde threads.
+
+    No-op en sistemas sin pythoncom (Mac/Linux).
     """
+    thread_id = threading.get_ident()
     try:
         import pythoncom  # type: ignore
     except ImportError:
+        _log(f"_sap_com_apartment: pythoncom no disponible (thread={thread_id}, no-op)")
         yield
         return
 
-    pythoncom.CoInitialize()
+    _log(f"_sap_com_apartment: llamando CoInitialize() en thread={thread_id}...")
+    try:
+        pythoncom.CoInitialize()
+        _log(f"_sap_com_apartment: CoInitialize OK (thread={thread_id})")
+    except Exception as exc:
+        _log(f"_sap_com_apartment: CoInitialize FALLÓ — {exc!r}")
+        raise
+
     try:
         yield
     finally:
         try:
             pythoncom.CoUninitialize()
-        except Exception:
-            pass
+            _log(f"_sap_com_apartment: CoUninitialize OK (thread={thread_id})")
+        except Exception as exc:
+            _log(f"_sap_com_apartment: CoUninitialize falló (ignorado) — {exc!r}")
 
 
 def _install_tk_exception_handler(root: tk.Tk) -> None:

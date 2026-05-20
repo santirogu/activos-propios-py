@@ -112,16 +112,21 @@ def get_sap_session():
         RuntimeError: si pywin32 no está instalado, SAP GUI no está corriendo,
             no hay conexión activa o no hay sesión iniciada.
     """
+    _log("get_sap_session: importando win32com.client...")
     try:
         import win32com.client  # type: ignore
     except ImportError as exc:
+        _log(f"get_sap_session: ImportError → {exc!r}")
         raise RuntimeError(
             "Falta la dependencia pywin32. Instalar con: pip install pywin32"
         ) from exc
 
+    _log("get_sap_session: llamando win32com.client.GetObject('SAPGUI')...")
     try:
         sap_gui_auto = win32com.client.GetObject("SAPGUI")
+        _log("get_sap_session: GetObject('SAPGUI') OK")
     except Exception as exc:
+        _log(f"get_sap_session: GetObject FALLÓ — {exc!r}")
         raise RuntimeError(
             "No se pudo conectar a SAP GUI. Verifica:\n"
             "  - SAP GUI for Windows está abierto y con sesión iniciada.\n"
@@ -130,14 +135,19 @@ def get_sap_session():
         ) from exc
 
     application = sap_gui_auto.GetScriptingEngine
-    if application.Children.Count == 0:
+    num_conex = application.Children.Count
+    _log(f"get_sap_session: conexiones detectadas = {num_conex}")
+    if num_conex == 0:
         raise RuntimeError("No hay conexiones SAP activas en este SAP GUI.")
     connection = application.Children(0)
-    if connection.Children.Count == 0:
+    num_ses = connection.Children.Count
+    _log(f"get_sap_session: sesiones en conexión[0] = {num_ses}")
+    if num_ses == 0:
         raise RuntimeError(
             "No hay sesiones activas en la conexión SAP. "
             "Inicia sesión en el sistema SAP antes de correr este script."
         )
+    _log("get_sap_session: devolviendo sesión[0][0]")
     return connection.Children(0)
 
 
