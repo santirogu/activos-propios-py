@@ -458,7 +458,20 @@ def _exportar_via_pc_list(
     session, carpeta_destino: str, nombre_archivo: str
 ) -> None:
     """Exporta usando %PC (System > List > Save > File). Funciona para
-    listas SAP clásicas como AR15."""
+    listas SAP clásicas como AR15.
+
+    La estructura del diálogo que abre %PC varía entre versiones SAP:
+      - Versión A: muestra primero un diálogo de selección de formato
+        con OK en `tbar[0]/btn[0]`, después abre el save-as.
+      - Versión B: muestra un popup distinto sin ese botón estándar.
+      - Versión C: abre directamente el save-as (sin paso de formato).
+
+    Estrategia robusta:
+      1. Tras %PC, probar si ya hay un save-as en wnd[1] (buscar DY_PATH).
+      2. Si no, enviar Enter (sendVKey 0) a wnd[1] — actúa como "OK"
+         universal en cualquier diálogo modal sin depender del ID del
+         botón. Después intentamos de nuevo el save-as.
+    """
     _log("  Modo PC list: usando %PC en okcd...")
     wnd = _ejecutar(
         "Localizar ventana principal wnd[0]",
@@ -474,17 +487,26 @@ def _exportar_via_pc_list(
     )
     _ejecutar("Enviar Enter (sendVKey 0)", wnd.sendVKey, 0)
 
-    # SAP abre un popup de selección de formato. Por default queda en la
-    # primera opción ("unconverted"). Intentamos pulsar OK directo — si
-    # genera un .txt en vez de .xlsx, el usuario puede ajustar la opción
-    # manualmente o re-grabar con la selección específica.
-    boton_ok_formato = _ejecutar(
-        "Localizar OK del diálogo de formato (wnd[1]/tbar[0]/btn[0])",
-        session.findById, "wnd[1]/tbar[0]/btn[0]",
-    )
-    _ejecutar("Confirmar formato (OK)", boton_ok_formato.press)
+    # ¿Save-as ya está abierto? Si DY_PATH existe en wnd[1], saltamos el
+    # paso de "confirmar formato".
+    save_dialog_listo = False
+    try:
+        session.findById("wnd[1]/usr/ctxtDY_PATH")
+        save_dialog_listo = True
+        _log("  → Save-as detectado directamente en wnd[1] (sin paso de formato)")
+    except Exception:
+        _log("  → wnd[1] no es el save-as todavía; enviando Enter para avanzar")
 
-    # Diálogo de guardar archivo
+    if not save_dialog_listo:
+        # Mandar Enter al diálogo de formato (cualquiera que sea su
+        # estructura). Enter actúa como OK por default.
+        wnd1 = _ejecutar(
+            "Localizar diálogo intermedio (wnd[1])",
+            session.findById, "wnd[1]",
+        )
+        _ejecutar("Confirmar formato con Enter (sendVKey 0)", wnd1.sendVKey, 0)
+
+    # Diálogo de guardar archivo (debe estar abierto ahora)
     _rellenar_save_dialog(session, carpeta_destino, nombre_archivo)
     _log(f"Archivo guardado en: {carpeta_destino}\\{nombre_archivo}")
 

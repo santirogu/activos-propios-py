@@ -374,18 +374,42 @@ class ExportarAExcelTest(unittest.TestCase):
         )
         self.assertIn(("wnd[0]", "sendVKey", 0), session.actions)
 
-    def test_pc_list_confirms_format_dialog_with_ok(self):
+    def test_pc_list_skips_format_step_when_save_dialog_already_open(self):
+        """Si DY_PATH ya está disponible en wnd[1] (algunas versiones SAP
+        abren save-as directamente), no debe enviar Enter intermedio."""
         sox_report.EXPORT_METHOD = "pc_list"
         session = MockSAPSession()
         exportar_a_excel(session, r"C:\salida", "SOX_ISA.xlsx")
 
-        # Pulsa OK al menos una vez (la primera vez es para confirmar el
-        # formato; la segunda es para guardar el archivo).
-        ok_presses = [
-            a for a in session.actions
-            if a == ("wnd[1]/tbar[0]/btn[0]", "press")
+        # MockSAPSession siempre encuentra elementos, así que la rama
+        # save_dialog_listo=True se ejecuta. No debe haber sendVKey 0 sobre
+        # wnd[1] (solo el sendVKey 0 sobre wnd[0] tras %PC).
+        enters_a_wnd1 = [
+            a for a in session.actions if a == ("wnd[1]", "sendVKey", 0)
         ]
-        self.assertGreaterEqual(len(ok_presses), 2)
+        self.assertEqual(len(enters_a_wnd1), 0)
+
+    def test_pc_list_sends_enter_when_format_dialog_intercepts(self):
+        """Si DY_PATH no aparece en wnd[1] (hay un format dialog primero),
+        debe enviar Enter (sendVKey 0) a wnd[1] como OK universal."""
+        sox_report.EXPORT_METHOD = "pc_list"
+        session = MockSAPSession()
+        original_find = session.findById
+        dy_path_already_failed = [False]
+
+        def find_with_dy_path_initially_missing(sap_id):
+            # La primera lookup de DY_PATH falla (sin save-as todavía).
+            # Las siguientes lookups (después del Enter) son OK.
+            if sap_id == "wnd[1]/usr/ctxtDY_PATH" and not dy_path_already_failed[0]:
+                dy_path_already_failed[0] = True
+                raise Exception("save-as todavía no aparece")
+            return original_find(sap_id)
+
+        session.findById = find_with_dy_path_initially_missing
+        exportar_a_excel(session, r"C:\salida", "SOX_ISA.xlsx")
+
+        # Verificar que se envió Enter a wnd[1]
+        self.assertIn(("wnd[1]", "sendVKey", 0), session.actions)
 
     def test_pc_list_fills_save_dialog(self):
         sox_report.EXPORT_METHOD = "pc_list"
