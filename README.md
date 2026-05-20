@@ -58,6 +58,7 @@ La ventana muestra dos botones:
 
 ```bash
 python src/main.py
+
 ```
 
 ### Botón "Extraer información en txt"
