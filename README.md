@@ -86,6 +86,26 @@ También se puede ejecutar la carga sin GUI:
 python src/sap_upload.py
 ```
 
+### Botón "Control SOX"
+
+Abre un diálogo modal con un formulario para generar el **Reporte SOX** desde SAP:
+
+- **Sociedad** — selector desplegable (`Combobox` en estado `readonly`) con las opciones: `TRAN, ISA, ITCH, CEYBA, CABA, RPAE, CTMP, REPD, ISAP`. El usuario no puede escribir valores arbitrarios.
+- **Desde** / **Hasta** — campos de texto restringidos a dígitos y puntos (máx 10 caracteres). Formato esperado `dd.mm.aaaa`.
+
+Validaciones al presionar **"Generar Reporte SOX"**:
+1. Sociedad debe estar en la lista permitida.
+2. Ambas fechas deben tener formato `dd.mm.aaaa` válido.
+3. `Hasta` debe ser `>=` `Desde`.
+
+Si cualquier validación falla, se muestra un diálogo de error y no se ejecuta nada. Si todo es válido, se pide confirmación y el flujo SAP corre en un hilo background. Al terminar, el archivo `SOX_<SOCIEDAD>_<YYYYMMDD_HHMMSS>.xlsx` queda en `salida/`.
+
+También se puede ejecutar desde CLI:
+
+```bash
+python src/sox_report.py ISA 01.05.2026 31.05.2026
+```
+
 ### Debugging y logs
 
 La app imprime logs con timestamp `[HH:MM:SS]` cada vez que se presiona un botón, describe lo que está haciendo (validaciones, archivos previos, extracción, etc.). Para verlos en tiempo real, ejecutar desde un terminal:
@@ -139,9 +159,9 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **84 pruebas** distribuidas en dos archivos:
+La suite contiene **138 pruebas** distribuidas en tres archivos:
 
-#### `tests/test_main.py` (48 pruebas)
+#### `tests/test_main.py` (60 pruebas)
 
 **`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
 
@@ -173,6 +193,10 @@ La suite contiene **84 pruebas** distribuidas en dos archivos:
 
 **`SubirASapFlagTest`** (5 pruebas) — gestión correcta del flag `_upload_en_curso`: True durante el worker, False tras éxito o error, no se setea si el usuario cancela, botón queda disabled si `salida/` queda vacía tras el upload.
 
+**`ControlSoxDialogTest`** (4 pruebas) — el diálogo Control SOX expone Combobox con valores válidos, estado readonly, StringVars del formulario y título correcto.
+
+**`GenerarReporteSoxHandlerTest`** (8 pruebas) — handler del botón "Generar Reporte SOX": validación de sociedad, formato de fecha, rango fechas, cancelación, happy path con normalización de sociedad, gestión del estado del botón, y manejo de errores en el worker (SAP no disponible, flujo falla).
+
 **`SubirASapTest`** (11 pruebas) — handler del botón "Subir a SAP":
 
 | Test | Qué valida |
@@ -188,6 +212,21 @@ La suite contiene **84 pruebas** distribuidas en dos archivos:
 | `test_worker_handles_sap_connection_error` | `RuntimeError` SAP → error, botón se reactiva |
 | `test_worker_handles_lsmw_flow_error` | Excepción del flujo → error, NO muestra info de éxito |
 | `test_worker_resets_status_on_error` | `status_var` se vacía tras error |
+
+#### `tests/test_sox_report.py` (42 pruebas)
+
+| Clase | Tests | Cobertura |
+|---|---|---|
+| `ValidarSociedadTest` | 6 | Acepta valores válidos, normaliza a uppercase, rechaza inválidos/vacíos/no-string |
+| `ValidarFechaTest` | 7 | Acepta formato correcto, rechaza otros formatos, día/mes inválido, vacío, alfabético |
+| `ValidarRangoFechasTest` | 5 | `desde < hasta`, `desde == hasta`, rechaza `hasta < desde`, propaga errores de formato |
+| `ValidarCaracterFechaTest` | 4 | Per-keystroke: acepta dígitos/puntos, rechaza letras/símbolos/más-de-10-chars |
+| `GetSapSessionTest` | 2 | pywin32 ausente, devuelve sesión OK |
+| `AbrirTransaccionSoxTest` | 2 | maximize + doubleClickNode F00039, orden correcto |
+| `IngresarParametrosTest` | 3 | P_BUKRS/S_DATUM-LOW/HIGH + setFocus + F8 |
+| `ExportarAExcelTest` | 3 | &MB_EXPORT + &XXL, llena DY_PATH/DY_FILENAME, fallback close si no hay diálogo |
+| `GenerarReporteSoxTest` | 5 | Orden de pasos, normaliza sociedad, rechaza inválidos, nombre default con timestamp |
+| `MainEntryPointTest` | 5 | Exit codes según argumentos y errores de validación/SAP |
 
 #### `tests/test_sap_upload.py` (36 pruebas)
 
@@ -218,14 +257,18 @@ La suite contiene **84 pruebas** distribuidas en dos archivos:
 ```
 .
 ├── src/
-│   ├── main.py                      # App GUI: 2 botones (extraer + subir a SAP)
-│   └── sap_upload.py                # Lógica de carga LSMW vía SAP GUI Scripting
+│   ├── main.py                      # App GUI: 3 botones (extraer + subir SAP + Control SOX)
+│   ├── sap_upload.py                # Carga LSMW vía SAP GUI Scripting
+│   └── sox_report.py                # Generación Reporte SOX vía SAP GUI Scripting
 ├── tests/
-│   ├── test_main.py                 # 22 pruebas: extracción + botón SAP
-│   └── test_sap_upload.py           # 32 pruebas: flujo LSMW completo
+│   ├── test_main.py                 # 60 pruebas: extracción + botones + diálogo SOX
+│   ├── test_sap_upload.py           # 36 pruebas: flujo LSMW completo
+│   └── test_sox_report.py           # 42 pruebas: validaciones + flujo SOX
 ├── resources/
 │   ├── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla
-│   └── script_sap_base.txt          # Grabación VBS de referencia (UTF-16)
+│   ├── script_sap_base.txt          # Grabación VBS del flujo LSMW (UTF-16)
+│   ├── Script1.vbs                  # Grabación VBS: ruta dinámica en Specify Files
+│   └── Scriptsox.vbs                # Grabación VBS del flujo Reporte SOX
 ├── docs/
 │   └── flujo-proceso.png            # Diagrama del proceso completo
 ├── salida/                          # Carpeta generada con los .txt exportados

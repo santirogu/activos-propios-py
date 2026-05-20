@@ -2,7 +2,7 @@ import threading
 import time
 import traceback
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 from pathlib import Path
 from datetime import datetime
 
@@ -259,11 +259,208 @@ def subir_a_sap(root: tk.Tk, status_var: tk.StringVar, button: tk.Button) -> Non
     threading.Thread(target=worker, daemon=True).start()
 
 
+# ---------------------------------------------------------------------------
+# Control SOX — diálogo de generación de reporte
+# ---------------------------------------------------------------------------
+
+def _generar_reporte_sox_handler(
+    dialog: tk.Toplevel,
+    sociedad: str,
+    fecha_desde: str,
+    fecha_hasta: str,
+    status_var: tk.StringVar,
+    button: tk.Button,
+) -> None:
+    """Valida los inputs y lanza el worker que genera el reporte SOX."""
+    try:
+        from sox_report import validar_sociedad, validar_rango_fechas
+    except ImportError as exc:
+        messagebox.showerror(
+            "Error de import", f"No se pudo importar sox_report:\n{exc}"
+        )
+        return
+
+    try:
+        sociedad_norm = validar_sociedad(sociedad)
+        validar_rango_fechas(fecha_desde, fecha_hasta)
+    except ValueError as exc:
+        messagebox.showerror("Datos inválidos", str(exc))
+        return
+
+    if not messagebox.askyesno(
+        "Confirmar generación del reporte SOX",
+        f"Se generará el reporte SOX para:\n"
+        f"  • Sociedad: {sociedad_norm}\n"
+        f"  • Desde: {fecha_desde}\n"
+        f"  • Hasta: {fecha_hasta}\n\n"
+        f"El archivo se guardará en salida/.\n\n"
+        f"Asegúrate de tener SAP abierto y con sesión iniciada.\n\n"
+        f"¿Continuar?",
+    ):
+        return
+
+    button.config(state="disabled")
+
+    def update_status(text: str) -> None:
+        dialog.after(0, status_var.set, text)
+
+    def show_info(title: str, message: str) -> None:
+        dialog.after(0, lambda: messagebox.showinfo(title, message))
+
+    def show_error(title: str, message: str) -> None:
+        dialog.after(0, lambda: messagebox.showerror(title, message))
+
+    def reenable() -> None:
+        dialog.after(0, lambda: button.config(state="normal"))
+
+    def worker() -> None:
+        try:
+            try:
+                from sox_report import generar_reporte_sox, get_sap_session
+            except ImportError as exc:
+                show_error("Error de import", f"No se pudo importar sox_report:\n{exc}")
+                return
+
+            try:
+                update_status("Conectando a la sesión SAP...")
+                session = get_sap_session()
+
+                update_status(
+                    f"Generando reporte SOX para {sociedad_norm} "
+                    f"({fecha_desde} → {fecha_hasta})..."
+                )
+                carpeta, nombre = generar_reporte_sox(
+                    session, sociedad_norm, fecha_desde, fecha_hasta
+                )
+
+                update_status(f"Reporte generado: {nombre}")
+                show_info(
+                    "Reporte SOX generado",
+                    f"Archivo guardado en:\n{carpeta}\\{nombre}",
+                )
+            except Exception as exc:
+                update_status("")
+                show_error("Error generando reporte SOX", str(exc))
+        finally:
+            reenable()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def control_sox(root: tk.Tk) -> tk.Toplevel:
+    """Abre el diálogo "Control SOX" con formulario (Sociedad + fechas).
+
+    Devuelve la ventana `Toplevel` para que los tests puedan inspeccionarla.
+    """
+    from sox_report import VALID_SOCIEDADES, validar_caracter_fecha
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Control SOX")
+    dialog.geometry("500x340")
+    dialog.resizable(False, False)
+    dialog.transient(root)
+
+    tk.Label(
+        dialog, text="Control SOX", font=("Helvetica", 13, "bold")
+    ).pack(pady=(18, 4))
+    tk.Label(
+        dialog,
+        text="Genera el Reporte SOX con los parámetros indicados",
+        font=("Helvetica", 10),
+        fg="#555",
+    ).pack(pady=(0, 12))
+
+    form = tk.Frame(dialog)
+    form.pack(pady=(0, 12))
+
+    # --- Sociedad (Combobox readonly) ---
+    tk.Label(form, text="Sociedad:", anchor="e", width=10).grid(
+        row=0, column=0, padx=4, pady=6, sticky="e"
+    )
+    sociedad_var = tk.StringVar()
+    sociedad_combo = ttk.Combobox(
+        form,
+        textvariable=sociedad_var,
+        values=list(VALID_SOCIEDADES),
+        state="readonly",
+        width=14,
+    )
+    sociedad_combo.grid(row=0, column=1, padx=4, pady=6, sticky="w")
+
+    # --- Fechas con validación de tecla ---
+    vcmd = (dialog.register(validar_caracter_fecha), "%P")
+
+    tk.Label(form, text="Desde:", anchor="e", width=10).grid(
+        row=1, column=0, padx=4, pady=6, sticky="e"
+    )
+    desde_var = tk.StringVar()
+    desde_entry = tk.Entry(
+        form, textvariable=desde_var, validate="key",
+        validatecommand=vcmd, width=16,
+    )
+    desde_entry.grid(row=1, column=1, padx=4, pady=6, sticky="w")
+    tk.Label(form, text="(dd.mm.aaaa)", fg="#777").grid(
+        row=1, column=2, padx=4
+    )
+
+    tk.Label(form, text="Hasta:", anchor="e", width=10).grid(
+        row=2, column=0, padx=4, pady=6, sticky="e"
+    )
+    hasta_var = tk.StringVar()
+    hasta_entry = tk.Entry(
+        form, textvariable=hasta_var, validate="key",
+        validatecommand=vcmd, width=16,
+    )
+    hasta_entry.grid(row=2, column=1, padx=4, pady=6, sticky="w")
+    tk.Label(form, text="(dd.mm.aaaa)", fg="#777").grid(
+        row=2, column=2, padx=4
+    )
+
+    status_var = tk.StringVar()
+
+    btn_generar = tk.Button(
+        dialog,
+        text="Generar Reporte SOX",
+        font=("Helvetica", 11),
+        padx=18,
+        pady=6,
+    )
+    btn_generar.config(
+        command=lambda: _generar_reporte_sox_handler(
+            dialog,
+            sociedad_var.get(),
+            desde_var.get(),
+            hasta_var.get(),
+            status_var,
+            btn_generar,
+        )
+    )
+    btn_generar.pack()
+
+    tk.Label(
+        dialog,
+        textvariable=status_var,
+        font=("Helvetica", 9),
+        fg="#1a7f37",
+        wraplength=460,
+    ).pack(pady=(12, 0))
+
+    # Exponer widgets clave en el dialog para que los tests puedan inspeccionar.
+    dialog.sociedad_var = sociedad_var
+    dialog.desde_var = desde_var
+    dialog.hasta_var = hasta_var
+    dialog.status_var = status_var
+    dialog.sociedad_combo = sociedad_combo
+    dialog.btn_generar = btn_generar
+
+    return dialog
+
+
 def main() -> None:
     root = tk.Tk()
     _install_tk_exception_handler(root)
     root.title("Creación Activos SAP")
-    root.geometry("480x260")
+    root.geometry("480x320")
     root.resizable(False, False)
 
     title = tk.Label(
@@ -305,7 +502,18 @@ def main() -> None:
         state="disabled",
     )
     btn_subir.config(command=lambda: subir_a_sap(root, status_var, btn_subir))
-    btn_subir.pack()
+    btn_subir.pack(pady=(0, 8))
+
+    btn_sox = tk.Button(
+        root,
+        text="Control SOX",
+        font=("Helvetica", 11),
+        padx=18,
+        pady=6,
+        width=24,
+        command=lambda: control_sox(root),
+    )
+    btn_sox.pack()
 
     status = tk.Label(
         root,

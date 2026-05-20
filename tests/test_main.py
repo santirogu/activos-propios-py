@@ -741,5 +741,198 @@ class SubirASapFlagTest(unittest.TestCase):
         self._hay_txt_patcher.start()
 
 
+# ---------------------------------------------------------------------------
+# Control SOX — diálogo y handler
+# ---------------------------------------------------------------------------
+
+
+class ControlSoxDialogTest(unittest.TestCase):
+    """Verifica la construcción del diálogo Control SOX y sus validaciones
+    declarativas (combobox readonly, valores válidos, tecla restringida en
+    fechas)."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_dialog_has_sociedad_combobox_with_valid_values(self) -> None:
+        dialog = main.control_sox(self.root)
+        try:
+            from sox_report import VALID_SOCIEDADES
+            self.assertEqual(
+                tuple(dialog.sociedad_combo["values"]), VALID_SOCIEDADES
+            )
+        finally:
+            dialog.destroy()
+
+    def test_sociedad_combobox_is_readonly(self) -> None:
+        dialog = main.control_sox(self.root)
+        try:
+            self.assertEqual(str(dialog.sociedad_combo["state"]), "readonly")
+        finally:
+            dialog.destroy()
+
+    def test_dialog_exposes_form_state_variables(self) -> None:
+        dialog = main.control_sox(self.root)
+        try:
+            self.assertIsInstance(dialog.sociedad_var, tk.StringVar)
+            self.assertIsInstance(dialog.desde_var, tk.StringVar)
+            self.assertIsInstance(dialog.hasta_var, tk.StringVar)
+            self.assertIsInstance(dialog.status_var, tk.StringVar)
+        finally:
+            dialog.destroy()
+
+    def test_dialog_title(self) -> None:
+        dialog = main.control_sox(self.root)
+        try:
+            self.assertEqual(dialog.title(), "Control SOX")
+        finally:
+            dialog.destroy()
+
+
+class GenerarReporteSoxHandlerTest(unittest.TestCase):
+    """Pruebas del handler _generar_reporte_sox_handler:
+    - validación previa muestra error si los inputs no son válidos
+    - cancelar la confirmación no lanza el worker
+    - el worker pasa los argumentos correctos al flujo SAP
+    - errores del worker se muestran al usuario y reactivan el botón
+    """
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.dialog = tk.Toplevel(self.root)
+        self.dialog.withdraw()
+        self.dialog.after = lambda delay, fn, *args: fn(*args)
+        self.status_var = tk.StringVar(master=self.dialog)
+        self.button = tk.Button(self.dialog)
+
+    def tearDown(self) -> None:
+        self.dialog.destroy()
+        self.root.destroy()
+
+    def test_shows_error_on_invalid_sociedad(self) -> None:
+        with patch("main.messagebox.showerror") as mock_err, \
+             patch("main.messagebox.askyesno") as mock_ask:
+            main._generar_reporte_sox_handler(
+                self.dialog, "XYZ", "01.05.2026", "31.05.2026",
+                self.status_var, self.button,
+            )
+
+        mock_err.assert_called_once()
+        title, message = mock_err.call_args[0][:2]
+        self.assertEqual(title, "Datos inválidos")
+        self.assertIn("XYZ", message)
+        mock_ask.assert_not_called()
+
+    def test_shows_error_on_invalid_date_format(self) -> None:
+        with patch("main.messagebox.showerror") as mock_err, \
+             patch("main.messagebox.askyesno"):
+            main._generar_reporte_sox_handler(
+                self.dialog, "ISA", "no-es-fecha", "31.05.2026",
+                self.status_var, self.button,
+            )
+
+        mock_err.assert_called_once()
+        self.assertEqual(mock_err.call_args[0][0], "Datos inválidos")
+
+    def test_shows_error_when_hasta_before_desde(self) -> None:
+        with patch("main.messagebox.showerror") as mock_err, \
+             patch("main.messagebox.askyesno"):
+            main._generar_reporte_sox_handler(
+                self.dialog, "ISA", "31.05.2026", "01.05.2026",
+                self.status_var, self.button,
+            )
+
+        mock_err.assert_called_once()
+        message = mock_err.call_args[0][1]
+        self.assertIn("mayor o igual", message)
+
+    def test_cancel_confirmation_does_not_start_worker(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=False), \
+             patch("main.threading.Thread") as mock_thread:
+            main._generar_reporte_sox_handler(
+                self.dialog, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button,
+            )
+
+        mock_thread.assert_not_called()
+
+    def test_happy_path_calls_generar_reporte_sox_with_normalized_inputs(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("sox_report.get_sap_session", return_value=MagicMock()), \
+             patch(
+                 "sox_report.generar_reporte_sox",
+                 return_value=("/tmp/salida", "SOX_ISA_x.xlsx"),
+             ) as mock_flow:
+            main._generar_reporte_sox_handler(
+                self.dialog, "isa", "01.05.2026", "31.05.2026",
+                self.status_var, self.button,
+            )
+
+        mock_flow.assert_called_once()
+        args = mock_flow.call_args[0]
+        # args: (session, sociedad, desde, hasta)
+        self.assertEqual(args[1], "ISA")  # normalizada a uppercase
+        self.assertEqual(args[2], "01.05.2026")
+        self.assertEqual(args[3], "31.05.2026")
+
+    def test_worker_disables_button_during_execution_and_reenables_after(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("sox_report.get_sap_session", return_value=MagicMock()), \
+             patch(
+                 "sox_report.generar_reporte_sox",
+                 return_value=("/tmp", "x.xlsx"),
+             ):
+            main._generar_reporte_sox_handler(
+                self.dialog, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button,
+            )
+
+        # tras el worker, debe estar habilitado de nuevo
+        self.assertEqual(str(self.button["state"]), "normal")
+
+    def test_worker_shows_error_when_sap_session_fails(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showerror") as mock_err, \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch(
+                 "sox_report.get_sap_session",
+                 side_effect=RuntimeError("no SAP"),
+             ):
+            main._generar_reporte_sox_handler(
+                self.dialog, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button,
+            )
+
+        mock_err.assert_called_once()
+        self.assertEqual(mock_err.call_args[0][0], "Error generando reporte SOX")
+        self.assertIn("no SAP", mock_err.call_args[0][1])
+
+    def test_worker_shows_error_when_flow_raises(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showerror") as mock_err, \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("sox_report.get_sap_session", return_value=MagicMock()), \
+             patch(
+                 "sox_report.generar_reporte_sox",
+                 side_effect=Exception("paso 4 falló"),
+             ):
+            main._generar_reporte_sox_handler(
+                self.dialog, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button,
+            )
+
+        mock_err.assert_called_once()
+        self.assertIn("paso 4 falló", mock_err.call_args[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()
