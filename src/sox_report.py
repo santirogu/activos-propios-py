@@ -71,6 +71,22 @@ def _log(mensaje: str) -> None:
     print(f"[{ts}] {mensaje}", flush=True)
 
 
+def _ejecutar(descripcion: str, fn, *args, **kwargs):
+    """Ejecuta `fn(*args, **kwargs)` loguenado la operación. Si falla,
+    re-lanza con un mensaje descriptivo que dice exactamente qué intentaba
+    hacer — esto es clave porque las excepciones COM de SAP (`SAP Frontend
+    Server`) suelen venir con descripción vacía.
+    """
+    _log(f"  → {descripcion}")
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Falló: {descripcion}\n"
+            f"Detalle técnico SAP: {exc!r}"
+        ) from exc
+
+
 # ---------------------------------------------------------------------------
 # VALIDACIONES
 # ---------------------------------------------------------------------------
@@ -172,10 +188,45 @@ def get_sap_session():
 
 def abrir_transaccion_sox(session) -> None:
     """Maximiza la ventana y abre la transacción haciendo doble clic en el
-    nodo `F00039` del árbol del menú SAP."""
+    nodo `F00039` del árbol del menú SAP.
+
+    Pre-requisito: el usuario debe estar logueado en SAP y en la pantalla
+    SAP Easy Access (donde el menú de roles es visible como árbol).
+    """
     _log("Paso 1/4: Abriendo transacción SOX (nodo F00039)...")
-    session.findById("wnd[0]").maximize()
-    session.findById(TREE_SHELL).doubleClickNode(SOX_NODE_KEY)
+
+    wnd = _ejecutar(
+        "Localizar ventana principal wnd[0]",
+        session.findById, "wnd[0]",
+    )
+    _ejecutar("Maximizar ventana principal", wnd.maximize)
+
+    try:
+        tree = _ejecutar(
+            f"Localizar árbol del menú SAP ({TREE_SHELL})",
+            session.findById, TREE_SHELL,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"{exc}\n\n"
+            f"PISTA: el árbol del menú no se encuentra. Verifica:\n"
+            f"  • Estar logueado en SAP y en la pantalla SAP Easy Access.\n"
+            f"  • Que el menú de roles del usuario sea visible (no minimizado).\n"
+            f"  • Que la ruta del árbol coincida con tu instalación."
+        ) from exc
+
+    try:
+        _ejecutar(
+            f"Doble clic en el nodo {SOX_NODE_KEY!r} del árbol",
+            tree.doubleClickNode, SOX_NODE_KEY,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"{exc}\n\n"
+            f"PISTA: el nodo {SOX_NODE_KEY!r} no existe en tu menú de usuario "
+            f"o el árbol está renderizando otra estructura. Abre la transacción "
+            f"manualmente para verificar el ID del nodo."
+        ) from exc
 
 
 def ingresar_parametros(
@@ -186,15 +237,45 @@ def ingresar_parametros(
         f"Paso 2/4: Ingresando sociedad='{sociedad}', "
         f"desde='{fecha_desde}', hasta='{fecha_hasta}'..."
     )
-    session.findById(CAMPO_SOCIEDAD).text = sociedad
-    session.findById(CAMPO_FECHA_DESDE).text = fecha_desde
-    session.findById(CAMPO_FECHA_HASTA).text = fecha_hasta
-    hasta_field = session.findById(CAMPO_FECHA_HASTA)
-    hasta_field.setFocus()
-    hasta_field.caretPosition = 5
+
+    sociedad_field = _ejecutar(
+        f"Localizar campo Sociedad ({CAMPO_SOCIEDAD})",
+        session.findById, CAMPO_SOCIEDAD,
+    )
+    _ejecutar(
+        f"Asignar Sociedad = '{sociedad}'",
+        lambda: setattr(sociedad_field, "text", sociedad),
+    )
+
+    desde_field = _ejecutar(
+        f"Localizar campo Fecha Desde ({CAMPO_FECHA_DESDE})",
+        session.findById, CAMPO_FECHA_DESDE,
+    )
+    _ejecutar(
+        f"Asignar Fecha Desde = '{fecha_desde}'",
+        lambda: setattr(desde_field, "text", fecha_desde),
+    )
+
+    hasta_field = _ejecutar(
+        f"Localizar campo Fecha Hasta ({CAMPO_FECHA_HASTA})",
+        session.findById, CAMPO_FECHA_HASTA,
+    )
+    _ejecutar(
+        f"Asignar Fecha Hasta = '{fecha_hasta}'",
+        lambda: setattr(hasta_field, "text", fecha_hasta),
+    )
+    _ejecutar("Foco en campo Fecha Hasta", hasta_field.setFocus)
+    _ejecutar(
+        "Posicionar cursor en Fecha Hasta (caretPosition=5)",
+        lambda: setattr(hasta_field, "caretPosition", 5),
+    )
 
     _log("Paso 3/4: Ejecutando reporte (F8)...")
-    session.findById("wnd[0]/tbar[1]/btn[8]").press()
+    boton_f8 = _ejecutar(
+        "Localizar botón Ejecutar (F8 = wnd[0]/tbar[1]/btn[8])",
+        session.findById, "wnd[0]/tbar[1]/btn[8]",
+    )
+    _ejecutar("Pulsar Ejecutar (F8)", boton_f8.press)
 
 
 def exportar_a_excel(
@@ -205,16 +286,27 @@ def exportar_a_excel(
     El recording original termina con `wnd[1].close`. En la práctica, tras
     seleccionar &XXL SAP abre un diálogo de guardar archivo. Esta función
     intenta rellenarlo (DY_PATH/DY_FILENAME); si la estructura del diálogo
-    difiere en otra instalación, hay que ajustar los IDs.
+    difiere en otra instalación, el fallback es `close wnd[1]`.
     """
     _log("Paso 4/4: Exportando grid a Excel (XXL)...")
-    grid = session.findById(DOCS_GRID_SHELL)
-    grid.pressToolbarContextButton("&MB_EXPORT")
-    grid.selectContextMenuItem("&XXL")
+
+    grid = _ejecutar(
+        f"Localizar grid de resultados ({DOCS_GRID_SHELL})",
+        session.findById, DOCS_GRID_SHELL,
+    )
+    _ejecutar(
+        "Abrir menú de exportación (&MB_EXPORT)",
+        grid.pressToolbarContextButton, "&MB_EXPORT",
+    )
+    _ejecutar(
+        "Seleccionar exportación a Excel (&XXL)",
+        grid.selectContextMenuItem, "&XXL",
+    )
 
     # Intento de rellenar el diálogo de guardar archivo.
     try:
-        session.findById("wnd[1]/usr/ctxtDY_PATH").text = carpeta_destino
+        path_field = session.findById("wnd[1]/usr/ctxtDY_PATH")
+        path_field.text = carpeta_destino
         nombre_field = session.findById("wnd[1]/usr/ctxtDY_FILENAME")
         nombre_field.text = nombre_archivo
         nombre_field.caretPosition = len(nombre_archivo)
@@ -225,7 +317,7 @@ def exportar_a_excel(
         # si SAP en esta instalación abre Excel directo en vez de mostrar
         # un diálogo de guardar.
         _log(
-            f"(no se detectó diálogo DY_PATH/DY_FILENAME: {exc} — "
+            f"(no se detectó diálogo DY_PATH/DY_FILENAME: {exc!r} — "
             f"cerrando wnd[1] como en el recording original)"
         )
         try:

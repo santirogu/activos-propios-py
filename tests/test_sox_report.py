@@ -321,6 +321,93 @@ class ExportarAExcelTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+class StepErrorContextTest(unittest.TestCase):
+    """Verifica que cuando una operación SAP falla durante los pasos del flujo
+    SOX, la excepción re-lanzada contiene contexto suficiente para identificar
+    la línea exacta que falló (clave porque las excepciones COM del SAP
+    Frontend Server traen descripción vacía).
+    """
+
+    def test_abrir_transaccion_raises_with_context_when_maximize_fails(self):
+        session = MockSAPSession()
+        wnd = session.findById("wnd[0]")
+        wnd.maximize = MagicMock(side_effect=Exception("COM error"))
+
+        with self.assertRaisesRegex(RuntimeError, "Maximizar"):
+            abrir_transaccion_sox(session)
+
+    def test_abrir_transaccion_raises_with_context_when_tree_not_found(self):
+        session = MockSAPSession()
+        original = session.findById
+
+        def find_with_error(sap_id):
+            if sap_id == TREE_SHELL:
+                raise Exception("tree not found")
+            return original(sap_id)
+
+        session.findById = find_with_error
+
+        with self.assertRaises(RuntimeError) as ctx:
+            abrir_transaccion_sox(session)
+        # Mensaje incluye la ruta del árbol y pista para el usuario
+        self.assertIn(TREE_SHELL, str(ctx.exception))
+        self.assertIn("Easy Access", str(ctx.exception))
+
+    def test_abrir_transaccion_raises_with_context_when_node_not_found(self):
+        session = MockSAPSession()
+        tree = session.findById(TREE_SHELL)
+        tree.doubleClickNode = MagicMock(side_effect=Exception("node missing"))
+
+        with self.assertRaises(RuntimeError) as ctx:
+            abrir_transaccion_sox(session)
+        msg = str(ctx.exception)
+        self.assertIn(SOX_NODE_KEY, msg)
+        # Incluye una pista para el usuario
+        self.assertIn("menú", msg.lower())
+
+    def test_ingresar_parametros_raises_when_sociedad_field_missing(self):
+        session = MockSAPSession()
+        original = session.findById
+
+        def find_with_error(sap_id):
+            if sap_id == CAMPO_SOCIEDAD:
+                raise Exception("field missing")
+            return original(sap_id)
+
+        session.findById = find_with_error
+
+        with self.assertRaisesRegex(RuntimeError, "Sociedad"):
+            ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
+
+    def test_ingresar_parametros_raises_when_f8_button_missing(self):
+        session = MockSAPSession()
+        original = session.findById
+
+        def find_with_error(sap_id):
+            if sap_id == "wnd[0]/tbar[1]/btn[8]":
+                raise Exception("button missing")
+            return original(sap_id)
+
+        session.findById = find_with_error
+
+        with self.assertRaisesRegex(RuntimeError, "Ejecutar"):
+            ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
+
+    def test_exportar_raises_when_grid_not_found(self):
+        session = MockSAPSession()
+        original = session.findById
+
+        def find_with_error(sap_id):
+            if sap_id == DOCS_GRID_SHELL:
+                raise Exception("grid missing")
+            return original(sap_id)
+
+        session.findById = find_with_error
+
+        with self.assertRaisesRegex(RuntimeError, "grid de resultados"):
+            exportar_a_excel(session, r"C:\salida", "x.xlsx")
+
+
 class GenerarReporteSoxTest(unittest.TestCase):
     def test_calls_all_steps_in_order(self):
         session = MockSAPSession()
