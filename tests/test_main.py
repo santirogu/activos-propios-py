@@ -373,6 +373,43 @@ class InstallTkExceptionHandlerTest(unittest.TestCase):
         self.assertIn("uncaught en callback", message)
 
 
+class SapComApartmentTest(unittest.TestCase):
+    """Pruebas del context manager `_sap_com_apartment` que inicializa el
+    apartamento COM antes de cualquier llamada SAP desde threads que no
+    sean el main. Sin esto, GetObject('SAPGUI') falla en los workers."""
+
+    def test_is_no_op_when_pythoncom_unavailable(self) -> None:
+        # En Mac no existe pythoncom — el CM debe ser no-op (no lanzar).
+        with patch.dict(sys.modules, {"pythoncom": None}):
+            with main._sap_com_apartment():
+                pass  # no debe lanzar
+
+    def test_calls_co_initialize_and_co_uninitialize(self) -> None:
+        fake_pythoncom = MagicMock()
+        with patch.dict(sys.modules, {"pythoncom": fake_pythoncom}):
+            with main._sap_com_apartment():
+                fake_pythoncom.CoInitialize.assert_called_once()
+                fake_pythoncom.CoUninitialize.assert_not_called()
+            fake_pythoncom.CoUninitialize.assert_called_once()
+
+    def test_calls_co_uninitialize_even_when_body_raises(self) -> None:
+        fake_pythoncom = MagicMock()
+        with patch.dict(sys.modules, {"pythoncom": fake_pythoncom}):
+            with self.assertRaises(RuntimeError):
+                with main._sap_com_apartment():
+                    raise RuntimeError("boom")
+        fake_pythoncom.CoUninitialize.assert_called_once()
+
+    def test_swallows_co_uninitialize_errors(self) -> None:
+        """Si CoUninitialize lanza, no debe propagarse (es cleanup)."""
+        fake_pythoncom = MagicMock()
+        fake_pythoncom.CoUninitialize.side_effect = Exception("denied")
+        with patch.dict(sys.modules, {"pythoncom": fake_pythoncom}):
+            # No debe lanzar pese al error en uninitialize
+            with main._sap_com_apartment():
+                pass
+
+
 class TestConexionSapHandlerTest(unittest.TestCase):
     """Pruebas del handler del botón 'Test conexión SAP'."""
 
@@ -615,6 +652,20 @@ class SubirASapTest(unittest.TestCase):
             subir_a_sap(self.root, self.status_var, self.button)
 
         self.assertEqual(self.status_var.get(), "")
+
+    def test_worker_runs_under_sap_com_apartment(self) -> None:
+        """El worker debe envolverse en _sap_com_apartment para que las
+        llamadas COM funcionen desde el thread de background."""
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("main._sap_com_apartment") as mock_cm, \
+             self._patch_sap_upload():
+            mock_cm.return_value.__enter__ = MagicMock(return_value=None)
+            mock_cm.return_value.__exit__ = MagicMock(return_value=False)
+            subir_a_sap(self.root, self.status_var, self.button)
+
+        mock_cm.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1021,6 +1072,26 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
 
         mock_err.assert_called_once()
         self.assertIn("paso 4 falló", mock_err.call_args[0][1])
+
+    def test_worker_runs_under_sap_com_apartment(self) -> None:
+        """El worker del SOX también debe envolverse en _sap_com_apartment."""
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("main._sap_com_apartment") as mock_cm, \
+             patch("sox_report.get_sap_session", return_value=MagicMock()), \
+             patch(
+                 "sox_report.generar_reporte_sox",
+                 return_value=("/tmp", "x.xlsx"),
+             ):
+            mock_cm.return_value.__enter__ = MagicMock(return_value=None)
+            mock_cm.return_value.__exit__ = MagicMock(return_value=False)
+            main._generar_reporte_sox_handler(
+                self.dialog, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button,
+            )
+
+        mock_cm.assert_called_once()
 
 
 if __name__ == "__main__":

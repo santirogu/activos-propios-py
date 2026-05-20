@@ -129,6 +129,12 @@ Si algo falla inesperadamente (permisos, archivo bloqueado en Excel, IDs SAP que
 - Muestra un diálogo con el tipo de error y el traceback completo.
 - Imprime el traceback en consola para diagnóstico detallado.
 
+#### Apartamento COM en threads de SAP
+
+Los workers de "Subir a SAP" y "Generar Reporte SOX" corren en threads de background. Windows exige `pythoncom.CoInitialize()` antes de cualquier llamada COM desde un thread que no sea el main — sin esto, `GetObject('SAPGUI')` falla con un error genérico aunque SAP esté abierto.
+
+La app incluye un context manager `_sap_com_apartment()` que inicializa el apartamento COM al entrar al worker y lo libera al salir. Esto es transparente para el usuario pero clave si Windows/pywin32/políticas corporativas exigen el chequeo (en algunos entornos pasa, en otros parece funcionar sin ello).
+
 Esto aplica tanto para excepciones manejadas (`FileNotFoundError`, `ValueError`, `OSError`) como para cualquier error no previsto — gracias a un handler global de excepciones de Tkinter (`root.report_callback_exception`).
 
 ### Notas sobre los datos exportados

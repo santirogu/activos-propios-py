@@ -1,3 +1,4 @@
+import contextlib
 import threading
 import time
 import traceback
@@ -47,6 +48,34 @@ def _show_unexpected_error(title: str, exc: BaseException) -> None:
         title,
         f"{type(exc).__name__}: {exc}\n\n--- Detalle técnico ---\n{tb_text}",
     )
+
+
+@contextlib.contextmanager
+def _sap_com_apartment():
+    """Inicializa el apartamento COM del thread actual y lo libera al salir.
+
+    Windows exige `pythoncom.CoInitialize()` antes de cualquier llamada COM
+    desde un thread que no sea el main de la app — sin esto, `GetObject('SAPGUI')`
+    en los workers de Subir a SAP / Generar Reporte SOX falla con un error
+    genérico ("No se pudo conectar a SAP GUI") aunque SAP esté abierto.
+
+    No-op en sistemas sin pywin32 (Mac/Linux) — los workers fallarían de
+    todas formas por la falta de SAP, pero al menos el módulo importa.
+    """
+    try:
+        import pythoncom  # type: ignore
+    except ImportError:
+        yield
+        return
+
+    pythoncom.CoInitialize()
+    try:
+        yield
+    finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
 
 
 def _install_tk_exception_handler(root: tk.Tk) -> None:
@@ -223,39 +252,45 @@ def subir_a_sap(root: tk.Tk, status_var: tk.StringVar, button: tk.Button) -> Non
 
     def worker() -> None:
         global _upload_en_curso
-        try:
+        with _sap_com_apartment():
             try:
-                from sap_upload import (
-                    get_latest_txt,
-                    get_sap_session,
-                    run_lsmw_flow,
-                )
-            except ImportError as exc:
-                show_error("Error de import", f"No se pudo importar sap_upload:\n{exc}")
-                return
+                try:
+                    from sap_upload import (
+                        get_latest_txt,
+                        get_sap_session,
+                        run_lsmw_flow,
+                    )
+                except ImportError as exc:
+                    show_error(
+                        "Error de import",
+                        f"No se pudo importar sap_upload:\n{exc}",
+                    )
+                    return
 
-            try:
-                update_status("Buscando .txt más reciente en salida/...")
-                latest = get_latest_txt()
+                try:
+                    update_status("Buscando .txt más reciente en salida/...")
+                    latest = get_latest_txt()
 
-                update_status("Conectando a la sesión SAP...")
-                session = get_sap_session()
+                    update_status("Conectando a la sesión SAP...")
+                    session = get_sap_session()
 
-                update_status("Ejecutando flujo LSMW (no toques SAP)...")
-                run_lsmw_flow(session, str(latest.parent), latest.name)
+                    update_status("Ejecutando flujo LSMW (no toques SAP)...")
+                    run_lsmw_flow(session, str(latest.parent), latest.name)
 
-                update_status("Carga completada. Revisa SM35 para el log de la BDC.")
-                show_info(
-                    "Carga completada",
-                    "Flujo LSMW ejecutado correctamente.\n\n"
-                    "Revisa SM35 para ver el log de la sesión BDC.",
-                )
-            except Exception as exc:
-                update_status("")
-                show_error("Error en carga SAP", str(exc))
-        finally:
-            _upload_en_curso = False
-            root.after(0, lambda: _refrescar_estado_boton_subir(button))
+                    update_status(
+                        "Carga completada. Revisa SM35 para el log de la BDC."
+                    )
+                    show_info(
+                        "Carga completada",
+                        "Flujo LSMW ejecutado correctamente.\n\n"
+                        "Revisa SM35 para ver el log de la sesión BDC.",
+                    )
+                except Exception as exc:
+                    update_status("")
+                    show_error("Error en carga SAP", str(exc))
+            finally:
+                _upload_en_curso = False
+                root.after(0, lambda: _refrescar_estado_boton_subir(button))
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -315,35 +350,39 @@ def _generar_reporte_sox_handler(
         dialog.after(0, lambda: button.config(state="normal"))
 
     def worker() -> None:
-        try:
+        with _sap_com_apartment():
             try:
-                from sox_report import generar_reporte_sox, get_sap_session
-            except ImportError as exc:
-                show_error("Error de import", f"No se pudo importar sox_report:\n{exc}")
-                return
+                try:
+                    from sox_report import generar_reporte_sox, get_sap_session
+                except ImportError as exc:
+                    show_error(
+                        "Error de import",
+                        f"No se pudo importar sox_report:\n{exc}",
+                    )
+                    return
 
-            try:
-                update_status("Conectando a la sesión SAP...")
-                session = get_sap_session()
+                try:
+                    update_status("Conectando a la sesión SAP...")
+                    session = get_sap_session()
 
-                update_status(
-                    f"Generando reporte SOX para {sociedad_norm} "
-                    f"({fecha_desde} → {fecha_hasta})..."
-                )
-                carpeta, nombre = generar_reporte_sox(
-                    session, sociedad_norm, fecha_desde, fecha_hasta
-                )
+                    update_status(
+                        f"Generando reporte SOX para {sociedad_norm} "
+                        f"({fecha_desde} → {fecha_hasta})..."
+                    )
+                    carpeta, nombre = generar_reporte_sox(
+                        session, sociedad_norm, fecha_desde, fecha_hasta
+                    )
 
-                update_status(f"Reporte generado: {nombre}")
-                show_info(
-                    "Reporte SOX generado",
-                    f"Archivo guardado en:\n{carpeta}\\{nombre}",
-                )
-            except Exception as exc:
-                update_status("")
-                show_error("Error generando reporte SOX", str(exc))
-        finally:
-            reenable()
+                    update_status(f"Reporte generado: {nombre}")
+                    show_info(
+                        "Reporte SOX generado",
+                        f"Archivo guardado en:\n{carpeta}\\{nombre}",
+                    )
+                except Exception as exc:
+                    update_status("")
+                    show_error("Error generando reporte SOX", str(exc))
+            finally:
+                reenable()
 
     threading.Thread(target=worker, daemon=True).start()
 
