@@ -52,6 +52,16 @@ TREE_SHELL = (
 )
 SOX_NODE_KEY = "F00039"
 
+# T-code SAP de la transacción del reporte SOX. Forma ROBUSTA de abrir la
+# transacción (escribir el código en okcd y Enter) — no depende del árbol
+# del menú, que tiene IDs (F00xxx) inestables entre usuarios y sesiones.
+#
+# Si se deja en None, el script intentará navegar el árbol con SOX_NODE_KEY
+# (como el recording original); el árbol falla seguido en usuarios distintos
+# al que grabó el script. Configurar aquí la T-code real es la solución
+# recomendada (ej. "ZSOX_REPORT" o el código que tenga la transacción).
+T_CODE_SOX: str | None = None
+
 CAMPO_SOCIEDAD = "wnd[0]/usr/ctxtP_BUKRS"
 CAMPO_FECHA_DESDE = "wnd[0]/usr/ctxtS_DATUM-LOW"
 CAMPO_FECHA_HASTA = "wnd[0]/usr/ctxtS_DATUM-HIGH"
@@ -186,20 +196,69 @@ def get_sap_session():
 # PASOS DEL FLUJO SOX
 # ---------------------------------------------------------------------------
 
-def abrir_transaccion_sox(session) -> None:
-    """Maximiza la ventana y abre la transacción haciendo doble clic en el
-    nodo `F00039` del árbol del menú SAP.
+def _intentar_listar_nodos_arbol(tree) -> str:
+    """Intenta enumerar los nodos visibles del árbol SAP para diagnóstico.
 
-    Pre-requisito: el usuario debe estar logueado en SAP y en la pantalla
-    SAP Easy Access (donde el menú de roles es visible como árbol).
+    Útil cuando un `doubleClickNode(...)` falla porque el ID grabado ya no
+    aplica. Devuelve una cadena con los pares (key → texto) listos para
+    incluir en el mensaje de error.
     """
-    _log("Paso 1/4: Abriendo transacción SOX (nodo F00039)...")
+    try:
+        keys = tree.GetAllNodeKeys()
+    except Exception as exc:
+        return f"  (no se pudo enumerar el árbol: {exc!r})"
+
+    keys_list = list(keys) if keys else []
+    if not keys_list:
+        return "  (árbol vacío o sin nodos visibles)"
+
+    lineas = []
+    for key in keys_list[:50]:
+        try:
+            texto = tree.GetNodeTextByKey(key)
+            lineas.append(f"  {key} → {texto}")
+        except Exception:
+            lineas.append(f"  {key} → (no se pudo leer el texto del nodo)")
+    if len(keys_list) > 50:
+        lineas.append(f"  ... ({len(keys_list) - 50} nodos más)")
+    return "\n".join(lineas)
+
+
+def abrir_transaccion_sox(session) -> None:
+    """Maximiza la ventana y abre la transacción del reporte SOX.
+
+    Si `T_CODE_SOX` está configurado, navega vía la casilla de comandos
+    (okcd) — esto es ROBUSTO entre usuarios y sesiones. Si no, intenta el
+    fallback de doble-clic en el árbol con `SOX_NODE_KEY` (como el
+    recording original), pero los IDs F00xxx del árbol son inestables.
+    """
+    _log("Paso 1/4: Abriendo transacción SOX...")
 
     wnd = _ejecutar(
         "Localizar ventana principal wnd[0]",
         session.findById, "wnd[0]",
     )
     _ejecutar("Maximizar ventana principal", wnd.maximize)
+
+    # Camino preferido: T-code en la casilla de comandos.
+    if T_CODE_SOX:
+        _log(f"  Modo T-code (recomendado): usando '{T_CODE_SOX}'")
+        okcd = _ejecutar(
+            "Localizar casilla de comandos (wnd[0]/tbar[0]/okcd)",
+            session.findById, "wnd[0]/tbar[0]/okcd",
+        )
+        _ejecutar(
+            f"Escribir T-code '{T_CODE_SOX}' en okcd",
+            lambda: setattr(okcd, "text", T_CODE_SOX),
+        )
+        _ejecutar("Enviar Enter (sendVKey 0)", wnd.sendVKey, 0)
+        return
+
+    # Fallback: navegación del árbol como en el recording.
+    _log(
+        f"  Modo árbol (fallback): doble-clic en nodo {SOX_NODE_KEY!r} — "
+        f"frágil entre usuarios. Considera configurar T_CODE_SOX."
+    )
 
     try:
         tree = _ejecutar(
@@ -221,11 +280,22 @@ def abrir_transaccion_sox(session) -> None:
             tree.doubleClickNode, SOX_NODE_KEY,
         )
     except RuntimeError as exc:
+        # Diagnóstico extra: listar los nodos disponibles para que el usuario
+        # identifique cuál es el correcto en SU árbol.
+        nodos_disponibles = _intentar_listar_nodos_arbol(tree)
         raise RuntimeError(
             f"{exc}\n\n"
-            f"PISTA: el nodo {SOX_NODE_KEY!r} no existe en tu menú de usuario "
-            f"o el árbol está renderizando otra estructura. Abre la transacción "
-            f"manualmente para verificar el ID del nodo."
+            f"DIAGNÓSTICO: los IDs del árbol SAP (F00xxx) son posiciones\n"
+            f"secuenciales asignadas cuando se renderiza el menú del usuario\n"
+            f"que grabó el script. Cambian entre usuarios y sesiones.\n\n"
+            f"SOLUCIÓN ROBUSTA: configurar la constante T_CODE_SOX al inicio\n"
+            f"de src/sox_report.py con la T-code real de la transacción\n"
+            f"(ej. T_CODE_SOX = 'ZTRX_SOX').\n\n"
+            f"Para descubrir la T-code:\n"
+            f"  1. En SAP, abre la transacción manualmente (como lo hacías).\n"
+            f"  2. Ve a 'Sistema → Estado' o mira la barra de título.\n"
+            f"  3. El campo 'Transacción' muestra la T-code (ej. ZSOX_REPORT).\n\n"
+            f"Nodos visibles en tu árbol actual:\n{nodos_disponibles}"
         ) from exc
 
 

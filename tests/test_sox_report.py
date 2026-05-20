@@ -69,6 +69,9 @@ class _MockElement:
     def close(self):
         self._session.actions.append((self._sap_id, "close"))
 
+    def sendVKey(self, key):
+        self._session.actions.append((self._sap_id, "sendVKey", key))
+
     def doubleClickNode(self, key):
         self._session.actions.append((self._sap_id, "doubleClickNode", key))
 
@@ -230,19 +233,75 @@ class GetSapSessionTest(unittest.TestCase):
 
 
 class AbrirTransaccionSoxTest(unittest.TestCase):
-    def test_maximizes_and_double_clicks_node(self):
+    def setUp(self):
+        # Asegurar que T_CODE_SOX está en None (modo árbol) para los tests
+        # del comportamiento por defecto. Tests específicos del modo T-code
+        # patchean este valor.
+        self._t_code_original = sox_report.T_CODE_SOX
+        sox_report.T_CODE_SOX = None
+
+    def tearDown(self):
+        sox_report.T_CODE_SOX = self._t_code_original
+
+    def test_maximizes_and_double_clicks_node_when_no_tcode(self):
         session = MockSAPSession()
         abrir_transaccion_sox(session)
 
         self.assertIn(("wnd[0]", "maximize"), session.actions)
-        self.assertIn((TREE_SHELL, "doubleClickNode", SOX_NODE_KEY), session.actions)
+        self.assertIn(
+            (TREE_SHELL, "doubleClickNode", SOX_NODE_KEY), session.actions
+        )
 
-    def test_actions_in_correct_order(self):
+    def test_uses_okcd_when_tcode_configured(self):
+        """Cuando T_CODE_SOX está configurado, navega por la casilla de
+        comandos en vez de tocar el árbol — más robusto."""
+        sox_report.T_CODE_SOX = "ZSOX_REPORT"
         session = MockSAPSession()
         abrir_transaccion_sox(session)
 
-        order = [a[0] for a in session.actions]
-        self.assertEqual(order, ["wnd[0]", TREE_SHELL])
+        self.assertEqual(
+            session._elements["wnd[0]/tbar[0]/okcd"].text, "ZSOX_REPORT"
+        )
+        self.assertIn(("wnd[0]", "sendVKey", 0), session.actions)
+        # No se debe haber tocado el árbol
+        self.assertFalse(
+            any(a[0] == TREE_SHELL for a in session.actions),
+            "No debería tocar el árbol cuando T_CODE_SOX está configurado",
+        )
+
+    def test_error_when_node_missing_includes_tree_diagnostic(self):
+        """Cuando el doubleClickNode falla, el mensaje debe incluir
+        pistas para resolver el problema y los nodos disponibles."""
+        session = MockSAPSession()
+        tree = session.findById(TREE_SHELL)
+        tree.doubleClickNode = MagicMock(side_effect=Exception("node missing"))
+        # Simular que el árbol expone GetAllNodeKeys/GetNodeTextByKey
+        tree.GetAllNodeKeys = MagicMock(return_value=["F00001", "F00002"])
+        tree.GetNodeTextByKey = MagicMock(side_effect=lambda k: f"Texto-{k}")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            abrir_transaccion_sox(session)
+        mensaje = str(ctx.exception)
+        # Pista sobre T_CODE_SOX
+        self.assertIn("T_CODE_SOX", mensaje)
+        # Lista de nodos disponibles en el árbol
+        self.assertIn("F00001", mensaje)
+        self.assertIn("Texto-F00001", mensaje)
+        self.assertIn("F00002", mensaje)
+
+    def test_error_when_node_missing_handles_tree_enumeration_failure(self):
+        """Si GetAllNodeKeys también falla, el diagnóstico no debe explotar."""
+        session = MockSAPSession()
+        tree = session.findById(TREE_SHELL)
+        tree.doubleClickNode = MagicMock(side_effect=Exception("node missing"))
+        tree.GetAllNodeKeys = MagicMock(side_effect=Exception("API no disponible"))
+
+        with self.assertRaises(RuntimeError) as ctx:
+            abrir_transaccion_sox(session)
+        mensaje = str(ctx.exception)
+        self.assertIn("T_CODE_SOX", mensaje)
+        # El bloque de nodos debe estar presente aunque vacío/con error
+        self.assertIn("no se pudo enumerar el árbol", mensaje)
 
 
 class IngresarParametrosTest(unittest.TestCase):
