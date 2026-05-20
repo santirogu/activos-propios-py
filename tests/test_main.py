@@ -792,6 +792,44 @@ class ControlSoxDialogTest(unittest.TestCase):
         finally:
             dialog.destroy()
 
+    def test_date_fields_use_date_entry_calendar_widget(self) -> None:
+        """Los campos Desde y Hasta deben ser DateEntry (tkcalendar) para
+        que el usuario pueda elegir la fecha de un calendario emergente."""
+        from tkcalendar import DateEntry
+
+        dialog = main.control_sox(self.root)
+        try:
+            self.assertIsInstance(dialog.desde_entry, DateEntry)
+            self.assertIsInstance(dialog.hasta_entry, DateEntry)
+        finally:
+            dialog.destroy()
+
+    def test_date_entries_emit_value_in_ddmmyyyy_format(self) -> None:
+        """El valor que escriben los DateEntry en la StringVar debe estar
+        en formato dd.mm.aaaa, listo para validar_fecha."""
+        from datetime import date
+
+        dialog = main.control_sox(self.root)
+        try:
+            # Forzar una fecha concreta via la API del widget
+            dialog.desde_entry.set_date(date(2026, 5, 1))
+            dialog.hasta_entry.set_date(date(2026, 5, 31))
+            self.assertEqual(dialog.desde_var.get(), "01.05.2026")
+            self.assertEqual(dialog.hasta_var.get(), "31.05.2026")
+        finally:
+            dialog.destroy()
+
+    def test_date_entries_initialize_with_today(self) -> None:
+        """Al abrir el diálogo, los DateEntry arrancan con la fecha actual."""
+        from datetime import date
+
+        dialog = main.control_sox(self.root)
+        try:
+            self.assertEqual(dialog.desde_entry.get_date(), date.today())
+            self.assertEqual(dialog.hasta_entry.get_date(), date.today())
+        finally:
+            dialog.destroy()
+
 
 class GenerarReporteSoxHandlerTest(unittest.TestCase):
     """Pruebas del handler _generar_reporte_sox_handler:

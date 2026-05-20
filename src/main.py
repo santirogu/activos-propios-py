@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime
 
 import openpyxl
+from tkcalendar import DateEntry
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EXCEL_PATH = PROJECT_ROOT / "resources" / "Formato_Dinamico_.xlsx"
@@ -387,16 +388,30 @@ def control_sox(root: tk.Tk) -> tk.Toplevel:
     )
     sociedad_combo.grid(row=0, column=1, padx=4, pady=6, sticky="w")
 
-    # --- Fechas con validación de tecla ---
+    # --- Fechas con calendario emergente (DateEntry de tkcalendar) ---
+    # DateEntry abre un popup de calendario al hacer clic en la flecha. El
+    # validatecommand sigue activo: aunque el usuario escriba a mano, solo
+    # se aceptan dígitos y puntos (máx 10 caracteres).
     vcmd = (dialog.register(validar_caracter_fecha), "%P")
+    fecha_hoy = datetime.now()
 
     tk.Label(form, text="Desde:", anchor="e", width=10).grid(
         row=1, column=0, padx=4, pady=6, sticky="e"
     )
     desde_var = tk.StringVar()
-    desde_entry = tk.Entry(
-        form, textvariable=desde_var, validate="key",
-        validatecommand=vcmd, width=16,
+    desde_entry = DateEntry(
+        form,
+        textvariable=desde_var,
+        date_pattern="dd.mm.yyyy",
+        width=14,
+        background="#1a73e8",
+        foreground="white",
+        borderwidth=2,
+        validate="key",
+        validatecommand=vcmd,
+        year=fecha_hoy.year,
+        month=fecha_hoy.month,
+        day=fecha_hoy.day,
     )
     desde_entry.grid(row=1, column=1, padx=4, pady=6, sticky="w")
     tk.Label(form, text="(dd.mm.aaaa)", fg="#777").grid(
@@ -407,9 +422,19 @@ def control_sox(root: tk.Tk) -> tk.Toplevel:
         row=2, column=0, padx=4, pady=6, sticky="e"
     )
     hasta_var = tk.StringVar()
-    hasta_entry = tk.Entry(
-        form, textvariable=hasta_var, validate="key",
-        validatecommand=vcmd, width=16,
+    hasta_entry = DateEntry(
+        form,
+        textvariable=hasta_var,
+        date_pattern="dd.mm.yyyy",
+        width=14,
+        background="#1a73e8",
+        foreground="white",
+        borderwidth=2,
+        validate="key",
+        validatecommand=vcmd,
+        year=fecha_hoy.year,
+        month=fecha_hoy.month,
+        day=fecha_hoy.day,
     )
     hasta_entry.grid(row=2, column=1, padx=4, pady=6, sticky="w")
     tk.Label(form, text="(dd.mm.aaaa)", fg="#777").grid(
@@ -451,6 +476,8 @@ def control_sox(root: tk.Tk) -> tk.Toplevel:
     dialog.hasta_var = hasta_var
     dialog.status_var = status_var
     dialog.sociedad_combo = sociedad_combo
+    dialog.desde_entry = desde_entry
+    dialog.hasta_entry = hasta_entry
     dialog.btn_generar = btn_generar
 
     return dialog

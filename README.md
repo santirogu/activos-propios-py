@@ -25,7 +25,8 @@ El proceso completo contempla:
 
 - **Python 3.9 o superior** con soporte para Tkinter (incluido por defecto; en macOS, el Python de Homebrew 3.12 **no** trae Tk — usa `python.org` o el del sistema).
 - **openpyxl** — manipulación del Excel (multiplataforma).
-- **pywin32** — solo necesario para el botón "Subir a SAP". Se instala automáticamente solo en Windows gracias al marcador `platform_system == "Windows"` en `requirements.txt`.
+- **tkcalendar** — widget de calendario para los campos de fecha del Control SOX (multiplataforma).
+- **pywin32** — solo necesario para los botones "Subir a SAP" y "Generar Reporte SOX". Se instala automáticamente solo en Windows gracias al marcador `platform_system == "Windows"` en `requirements.txt`.
 - El archivo `resources/Formato_Dinamico_.xlsx` debe existir.
 - Para subir a SAP: SAP GUI for Windows abierto con sesión iniciada y `sapgui/user_scripting = TRUE` (ver sección "Configuración SAP" más abajo).
 
@@ -91,7 +92,7 @@ python src/sap_upload.py
 Abre un diálogo modal con un formulario para generar el **Reporte SOX** desde SAP:
 
 - **Sociedad** — selector desplegable (`Combobox` en estado `readonly`) con las opciones: `TRAN, ISA, ITCH, CEYBA, CABA, RPAE, CTMP, REPD, ISAP`. El usuario no puede escribir valores arbitrarios.
-- **Desde** / **Hasta** — campos de texto restringidos a dígitos y puntos (máx 10 caracteres). Formato esperado `dd.mm.aaaa`.
+- **Desde** / **Hasta** — campos con **calendario emergente** (`DateEntry` de `tkcalendar`). El usuario puede elegir la fecha del calendario o escribirla a mano. Aún en escritura manual, el `validatecommand` restringe a dígitos y puntos (máx 10 caracteres). Formato `dd.mm.aaaa`.
 
 Validaciones al presionar **"Generar Reporte SOX"**:
 1. Sociedad debe estar en la lista permitida.
@@ -159,9 +160,9 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **138 pruebas** distribuidas en tres archivos:
+La suite contiene **147 pruebas** distribuidas en tres archivos:
 
-#### `tests/test_main.py` (60 pruebas)
+#### `tests/test_main.py` (63 pruebas)
 
 **`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
 
@@ -193,7 +194,7 @@ La suite contiene **138 pruebas** distribuidas en tres archivos:
 
 **`SubirASapFlagTest`** (5 pruebas) — gestión correcta del flag `_upload_en_curso`: True durante el worker, False tras éxito o error, no se setea si el usuario cancela, botón queda disabled si `salida/` queda vacía tras el upload.
 
-**`ControlSoxDialogTest`** (4 pruebas) — el diálogo Control SOX expone Combobox con valores válidos, estado readonly, StringVars del formulario y título correcto.
+**`ControlSoxDialogTest`** (7 pruebas) — el diálogo Control SOX expone Combobox con valores válidos, estado readonly, StringVars del formulario, título correcto, y los campos Desde/Hasta son `DateEntry` (calendario emergente) que escriben en formato `dd.mm.aaaa` e inicializan con la fecha actual.
 
 **`GenerarReporteSoxHandlerTest`** (8 pruebas) — handler del botón "Generar Reporte SOX": validación de sociedad, formato de fecha, rango fechas, cancelación, happy path con normalización de sociedad, gestión del estado del botón, y manejo de errores en el worker (SAP no disponible, flujo falla).
 
