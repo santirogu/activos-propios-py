@@ -86,16 +86,23 @@ CAMPO_SOCIEDAD = "wnd[0]/usr/ctxtP_BUKRS"
 CAMPO_FECHA_DESDE = "wnd[0]/usr/ctxtS_DATUM-LOW"
 CAMPO_FECHA_HASTA = "wnd[0]/usr/ctxtS_DATUM-HIGH"
 
-# ATENCIÓN: este shell ID viene del recording original (Scriptsox.vbs) que
-# usaba el módulo SAPLBANK_OBJ_CHDOC. El nuevo recording (Script2sox.vbs)
-# usa la T-code AR15 cuyo grid de resultados es DIFERENTE (típicamente
-# SAPLSLVC_FULLSCREEN o similar). Si la exportación a Excel falla en la
-# laptop corporativa, hay que re-grabar la parte del export en SAP con
-# AR15 y actualizar este shell ID con el nuevo path.
+# Shell del grid de resultados (sólo aplica al método "alv_grid").
+# Este path viene del recording original (Scriptsox.vbs) — no aplica a
+# AR15. Si en algún momento se necesita exportar desde un ALV grid con
+# este método, ajustar este ID.
 DOCS_GRID_SHELL = (
     "wnd[0]/usr/subDISPLAY:SAPLBANK_OBJ_CHDOC:0210/"
     "cntlCC_CHANGE_DOCUMENTS_SURVAY/shellcont/shell/shellcont[1]/shell"
 )
+
+# Método de exportación a archivo:
+#   "pc_list"  → usa la T-code %PC (System > List > Save > File). Funciona
+#                con listas SAP clásicas como AR15. Es el default actual.
+#   "alv_grid" → método del recording original (&MB_EXPORT > &XXL sobre el
+#                grid). Sólo aplica a ALV grids específicos.
+#   None       → no exporta. Deja el reporte abierto en SAP y el usuario
+#                guarda manualmente.
+EXPORT_METHOD: str | None = "pc_list"
 
 
 # ---------------------------------------------------------------------------
@@ -413,18 +420,82 @@ def ingresar_parametros(
     _ejecutar("Pulsar Ejecutar (F8)", boton_f8.press)
 
 
-def exportar_a_excel(
+def _rellenar_save_dialog(
     session, carpeta_destino: str, nombre_archivo: str
 ) -> None:
-    """Exporta el grid resultante a Excel (XXL) y guarda en la ruta dada.
+    """Llena el diálogo estándar de SAP "Save File" (DY_PATH + DY_FILENAME)
+    y presiona OK. Usado por ambos métodos de exportación."""
+    path_field = _ejecutar(
+        "Localizar campo de ruta (wnd[1]/usr/ctxtDY_PATH)",
+        session.findById, "wnd[1]/usr/ctxtDY_PATH",
+    )
+    _ejecutar(
+        f"Asignar ruta = '{carpeta_destino}'",
+        lambda: setattr(path_field, "text", carpeta_destino),
+    )
 
-    El recording original termina con `wnd[1].close`. En la práctica, tras
-    seleccionar &XXL SAP abre un diálogo de guardar archivo. Esta función
-    intenta rellenarlo (DY_PATH/DY_FILENAME); si la estructura del diálogo
-    difiere en otra instalación, el fallback es `close wnd[1]`.
-    """
-    _log("Paso 4/4: Exportando grid a Excel (XXL)...")
+    nombre_field = _ejecutar(
+        "Localizar campo de nombre (wnd[1]/usr/ctxtDY_FILENAME)",
+        session.findById, "wnd[1]/usr/ctxtDY_FILENAME",
+    )
+    _ejecutar(
+        f"Asignar nombre = '{nombre_archivo}'",
+        lambda: setattr(nombre_field, "text", nombre_archivo),
+    )
+    _ejecutar(
+        "Posicionar cursor al final del nombre",
+        lambda: setattr(nombre_field, "caretPosition", len(nombre_archivo)),
+    )
 
+    boton_ok = _ejecutar(
+        "Localizar botón OK del diálogo (wnd[1]/tbar[0]/btn[0])",
+        session.findById, "wnd[1]/tbar[0]/btn[0]",
+    )
+    _ejecutar("Pulsar OK para guardar", boton_ok.press)
+
+
+def _exportar_via_pc_list(
+    session, carpeta_destino: str, nombre_archivo: str
+) -> None:
+    """Exporta usando %PC (System > List > Save > File). Funciona para
+    listas SAP clásicas como AR15."""
+    _log("  Modo PC list: usando %PC en okcd...")
+    wnd = _ejecutar(
+        "Localizar ventana principal wnd[0]",
+        session.findById, "wnd[0]",
+    )
+    okcd = _ejecutar(
+        "Localizar casilla de comandos (wnd[0]/tbar[0]/okcd)",
+        session.findById, "wnd[0]/tbar[0]/okcd",
+    )
+    _ejecutar(
+        "Escribir '%PC' en okcd (System > List > Save > File)",
+        lambda: setattr(okcd, "text", "%PC"),
+    )
+    _ejecutar("Enviar Enter (sendVKey 0)", wnd.sendVKey, 0)
+
+    # SAP abre un popup de selección de formato. Por default queda en la
+    # primera opción ("unconverted"). Intentamos pulsar OK directo — si
+    # genera un .txt en vez de .xlsx, el usuario puede ajustar la opción
+    # manualmente o re-grabar con la selección específica.
+    boton_ok_formato = _ejecutar(
+        "Localizar OK del diálogo de formato (wnd[1]/tbar[0]/btn[0])",
+        session.findById, "wnd[1]/tbar[0]/btn[0]",
+    )
+    _ejecutar("Confirmar formato (OK)", boton_ok_formato.press)
+
+    # Diálogo de guardar archivo
+    _rellenar_save_dialog(session, carpeta_destino, nombre_archivo)
+    _log(f"Archivo guardado en: {carpeta_destino}\\{nombre_archivo}")
+
+
+def _exportar_via_alv_grid(
+    session, carpeta_destino: str, nombre_archivo: str
+) -> None:
+    """Exporta usando el menú contextual del ALV grid (&MB_EXPORT > &XXL).
+    Sólo funciona si el grid tiene el shell ID configurado en
+    DOCS_GRID_SHELL (no aplica a AR15)."""
+    _log("  Modo ALV grid: usando &MB_EXPORT + &XXL...")
     grid = _ejecutar(
         f"Localizar grid de resultados ({DOCS_GRID_SHELL})",
         session.findById, DOCS_GRID_SHELL,
@@ -437,28 +508,42 @@ def exportar_a_excel(
         "Seleccionar exportación a Excel (&XXL)",
         grid.selectContextMenuItem, "&XXL",
     )
+    _rellenar_save_dialog(session, carpeta_destino, nombre_archivo)
+    _log(f"Archivo guardado en: {carpeta_destino}\\{nombre_archivo}")
 
-    # Intento de rellenar el diálogo de guardar archivo.
-    try:
-        path_field = session.findById("wnd[1]/usr/ctxtDY_PATH")
-        path_field.text = carpeta_destino
-        nombre_field = session.findById("wnd[1]/usr/ctxtDY_FILENAME")
-        nombre_field.text = nombre_archivo
-        nombre_field.caretPosition = len(nombre_archivo)
-        session.findById("wnd[1]/tbar[0]/btn[0]").press()  # OK
-        _log(f"Archivo guardado en: {carpeta_destino}\\{nombre_archivo}")
-    except Exception as exc:
-        # Fallback: replicar el recording original que cierra wnd[1]. Útil
-        # si SAP en esta instalación abre Excel directo en vez de mostrar
-        # un diálogo de guardar.
+
+def exportar_a_excel(
+    session, carpeta_destino: str, nombre_archivo: str
+) -> None:
+    """Exporta el reporte al archivo dado usando el método configurado en
+    `EXPORT_METHOD`.
+
+    - "pc_list" (default): usa %PC, recomendado para AR15.
+    - "alv_grid": usa &MB_EXPORT > &XXL, requiere DOCS_GRID_SHELL válido.
+    - None: no exporta; el reporte queda visible en SAP para guardar
+      manualmente.
+    """
+    _log("Paso 4/4: Exportando reporte...")
+
+    if EXPORT_METHOD is None:
         _log(
-            f"(no se detectó diálogo DY_PATH/DY_FILENAME: {exc!r} — "
-            f"cerrando wnd[1] como en el recording original)"
+            "  EXPORT_METHOD=None → exportación omitida. "
+            "Guarda el reporte manualmente desde SAP."
         )
-        try:
-            session.findById("wnd[1]").close()
-        except Exception:
-            pass
+        return
+
+    if EXPORT_METHOD == "pc_list":
+        _exportar_via_pc_list(session, carpeta_destino, nombre_archivo)
+        return
+
+    if EXPORT_METHOD == "alv_grid":
+        _exportar_via_alv_grid(session, carpeta_destino, nombre_archivo)
+        return
+
+    raise ValueError(
+        f"EXPORT_METHOD inválido: '{EXPORT_METHOD}'. "
+        f"Usa 'pc_list', 'alv_grid' o None."
+    )
 
 
 def generar_reporte_sox(

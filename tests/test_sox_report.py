@@ -353,20 +353,42 @@ class IngresarParametrosTest(unittest.TestCase):
 
 
 class ExportarAExcelTest(unittest.TestCase):
-    def test_invokes_export_xxl_menu(self):
+    """El método default es 'pc_list' (System > List > Save > File via %PC),
+    que funciona con listas SAP clásicas como AR15. Tests específicos de
+    'alv_grid' patchean EXPORT_METHOD."""
+
+    def setUp(self):
+        self._method_original = sox_report.EXPORT_METHOD
+
+    def tearDown(self):
+        sox_report.EXPORT_METHOD = self._method_original
+
+    def test_default_method_uses_pc_command(self):
+        """En modo pc_list (default), escribe %PC en okcd y envía Enter."""
+        sox_report.EXPORT_METHOD = "pc_list"
         session = MockSAPSession()
         exportar_a_excel(session, r"C:\salida", "SOX_ISA.xlsx")
 
-        self.assertIn(
-            (DOCS_GRID_SHELL, "pressToolbarContextButton", "&MB_EXPORT"),
-            session.actions,
+        self.assertEqual(
+            session._elements["wnd[0]/tbar[0]/okcd"].text, "%PC"
         )
-        self.assertIn(
-            (DOCS_GRID_SHELL, "selectContextMenuItem", "&XXL"),
-            session.actions,
-        )
+        self.assertIn(("wnd[0]", "sendVKey", 0), session.actions)
 
-    def test_fills_save_dialog_when_available(self):
+    def test_pc_list_confirms_format_dialog_with_ok(self):
+        sox_report.EXPORT_METHOD = "pc_list"
+        session = MockSAPSession()
+        exportar_a_excel(session, r"C:\salida", "SOX_ISA.xlsx")
+
+        # Pulsa OK al menos una vez (la primera vez es para confirmar el
+        # formato; la segunda es para guardar el archivo).
+        ok_presses = [
+            a for a in session.actions
+            if a == ("wnd[1]/tbar[0]/btn[0]", "press")
+        ]
+        self.assertGreaterEqual(len(ok_presses), 2)
+
+    def test_pc_list_fills_save_dialog(self):
+        sox_report.EXPORT_METHOD = "pc_list"
         session = MockSAPSession()
         exportar_a_excel(session, r"C:\salida", "SOX_ISA_x.xlsx")
 
@@ -380,24 +402,46 @@ class ExportarAExcelTest(unittest.TestCase):
             session._elements["wnd[1]/usr/ctxtDY_FILENAME"].caretPosition,
             len("SOX_ISA_x.xlsx"),
         )
-        self.assertIn(("wnd[1]/tbar[0]/btn[0]", "press"), session.actions)
 
-    def test_falls_back_to_close_when_dialog_unavailable(self):
-        # Sesión donde wnd[1]/usr/ctxtDY_PATH no se puede acceder: forzamos
-        # que findById lance excepción para esa ruta específica.
+    def test_alv_grid_invokes_export_xxl_menu(self):
+        sox_report.EXPORT_METHOD = "alv_grid"
         session = MockSAPSession()
-        original_find = session.findById
+        exportar_a_excel(session, r"C:\salida", "SOX_ISA.xlsx")
 
-        def find_with_error(sap_id):
-            if sap_id == "wnd[1]/usr/ctxtDY_PATH":
-                raise Exception("dialog inexistente")
-            return original_find(sap_id)
+        self.assertIn(
+            (DOCS_GRID_SHELL, "pressToolbarContextButton", "&MB_EXPORT"),
+            session.actions,
+        )
+        self.assertIn(
+            (DOCS_GRID_SHELL, "selectContextMenuItem", "&XXL"),
+            session.actions,
+        )
 
-        session.findById = find_with_error
+    def test_alv_grid_fills_save_dialog(self):
+        sox_report.EXPORT_METHOD = "alv_grid"
+        session = MockSAPSession()
         exportar_a_excel(session, r"C:\salida", "x.xlsx")
 
-        # El recording original cierra wnd[1] como fallback.
-        self.assertIn(("wnd[1]", "close"), session.actions)
+        self.assertEqual(
+            session._elements["wnd[1]/usr/ctxtDY_PATH"].text, r"C:\salida"
+        )
+        self.assertEqual(
+            session._elements["wnd[1]/usr/ctxtDY_FILENAME"].text, "x.xlsx"
+        )
+
+    def test_none_method_skips_export(self):
+        sox_report.EXPORT_METHOD = None
+        session = MockSAPSession()
+        exportar_a_excel(session, r"C:\salida", "x.xlsx")
+
+        # No debe haber tocado okcd, ni el grid, ni el save dialog
+        self.assertFalse(session.actions)
+
+    def test_raises_on_invalid_method(self):
+        sox_report.EXPORT_METHOD = "metodo_inventado"
+        session = MockSAPSession()
+        with self.assertRaisesRegex(ValueError, "EXPORT_METHOD inválido"):
+            exportar_a_excel(session, r"C:\salida", "x.xlsx")
 
 
 # ---------------------------------------------------------------------------
@@ -487,19 +531,23 @@ class StepErrorContextTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Ejecutar"):
             ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
 
-    def test_exportar_raises_when_grid_not_found(self):
-        session = MockSAPSession()
-        original = session.findById
+    def test_exportar_raises_when_grid_not_found_in_alv_mode(self):
+        sox_report.EXPORT_METHOD = "alv_grid"
+        try:
+            session = MockSAPSession()
+            original = session.findById
 
-        def find_with_error(sap_id):
-            if sap_id == DOCS_GRID_SHELL:
-                raise Exception("grid missing")
-            return original(sap_id)
+            def find_with_error(sap_id):
+                if sap_id == DOCS_GRID_SHELL:
+                    raise Exception("grid missing")
+                return original(sap_id)
 
-        session.findById = find_with_error
+            session.findById = find_with_error
 
-        with self.assertRaisesRegex(RuntimeError, "grid de resultados"):
-            exportar_a_excel(session, r"C:\salida", "x.xlsx")
+            with self.assertRaisesRegex(RuntimeError, "grid de resultados"):
+                exportar_a_excel(session, r"C:\salida", "x.xlsx")
+        finally:
+            sox_report.EXPORT_METHOD = "pc_list"
 
 
 class GenerarReporteSoxTest(unittest.TestCase):
