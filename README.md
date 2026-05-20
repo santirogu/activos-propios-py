@@ -160,7 +160,7 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **147 pruebas** distribuidas en tres archivos:
+La suite contiene **151 pruebas** distribuidas en tres archivos:
 
 #### `tests/test_main.py` (63 pruebas)
 
@@ -304,6 +304,17 @@ Esta separación granular permite testear cada paso de forma aislada con un `Moc
 | Paso del proyecto | Fila step list | Función Python | Acciones SAP |
 |---|---|---|---|
 | Specify Files (configura ruta dinámica) | 6 | `configurar_ruta_archivo(session, carpeta, nombre)` | F2 + btn[25] + lbl[43,6] + btn[27] + F4 + DY_PATH/DY_FILENAME + 2×OK + Back + SPOP-OPTION1 |
+
+#### Flujo Control SOX (basado en `resources/Script2sox.vbs`)
+
+| Paso | Función Python | Acciones SAP |
+|---|---|---|
+| 1/4 | `abrir_transaccion_sox` | `okcd = "AR15"` + sendVKey 0 (modo T-code, robusto). Fallback: tree.doubleClickNode |
+| 2a/4 | `ingresar_parametros` | `P_BUKRS.text = sociedad` |
+| 2b/4 | `_seleccionar_fecha_calendario` (Desde) | foco S_DATUM-LOW + caretPosition 0 + sendVKey 4 (F4) + calendar.focusDate/selectionInterval con `yyyymmdd` |
+| 2c/4 | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH con la fecha hasta |
+| 3/4 | `ingresar_parametros` | F8 (`btn[8].press`) — ejecuta reporte |
+| 4/4 | `exportar_a_excel` | `&MB_EXPORT` + `&XXL` + intento DY_PATH/DY_FILENAME. **Pendiente:** el grid de AR15 difiere del shell grabado originalmente; re-grabar este paso si falla en producción. |
 | Assign Files | 7 | `step_assign_files` | btn[32] + VK3 |
 | Read Data | 8 | `step_read_data` | btn[32] + btn[8] + 2×VK3 |
 | Display Read Data | (auto-avanza) | `step_display_read_data` | btn[32] + popup + VK3 |

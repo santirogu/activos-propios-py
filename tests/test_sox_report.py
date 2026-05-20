@@ -305,20 +305,45 @@ class AbrirTransaccionSoxTest(unittest.TestCase):
 
 
 class IngresarParametrosTest(unittest.TestCase):
-    def test_sets_sociedad_and_dates(self):
+    """Verifica el nuevo flujo del Script2sox.vbs: sociedad por texto, fechas
+    vía calendario F4 (focusDate + selectionInterval en formato yyyymmdd)."""
+
+    def test_sets_sociedad_as_text(self):
         session = MockSAPSession()
         ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
 
         self.assertEqual(session._elements[CAMPO_SOCIEDAD].text, "ISA")
-        self.assertEqual(session._elements[CAMPO_FECHA_DESDE].text, "01.05.2026")
-        self.assertEqual(session._elements[CAMPO_FECHA_HASTA].text, "31.05.2026")
 
-    def test_focuses_hasta_field(self):
+    def test_opens_calendar_for_each_date_field(self):
         session = MockSAPSession()
         ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
 
+        # Foco y caretPosition=0 en el campo Desde antes de F4
+        self.assertIn((CAMPO_FECHA_DESDE, "setFocus"), session.actions)
+        self.assertEqual(session._elements[CAMPO_FECHA_DESDE].caretPosition, 0)
+        # Foco y caretPosition=0 en el campo Hasta antes de F4
         self.assertIn((CAMPO_FECHA_HASTA, "setFocus"), session.actions)
-        self.assertEqual(session._elements[CAMPO_FECHA_HASTA].caretPosition, 5)
+        self.assertEqual(session._elements[CAMPO_FECHA_HASTA].caretPosition, 0)
+        # F4 (sendVKey 4) se envió dos veces: una para cada fecha
+        f4_calls = [a for a in session.actions if a == ("wnd[0]", "sendVKey", 4)]
+        self.assertEqual(len(f4_calls), 2)
+
+    def test_sets_calendar_focus_and_selection_in_yyyymmdd_format(self):
+        session = MockSAPSession()
+        ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
+
+        from sox_report import CALENDAR_SHELL
+        calendario = session._elements[CALENDAR_SHELL]
+        # El selectionInterval queda con la última fecha procesada (Hasta).
+        # focusDate y selectionInterval se asignan dos veces (una por
+        # cada fecha) — el valor final refleja la fecha hasta.
+        self.assertEqual(calendario.focusDate, "20260531")
+        self.assertEqual(calendario.selectionInterval, "20260531,20260531")
+
+    def test_raises_when_date_format_invalid(self):
+        session = MockSAPSession()
+        with self.assertRaises(ValueError):
+            ingresar_parametros(session, "ISA", "no-fecha", "31.05.2026")
 
     def test_presses_f8_to_execute(self):
         session = MockSAPSession()
@@ -386,6 +411,16 @@ class StepErrorContextTest(unittest.TestCase):
     la línea exacta que falló (clave porque las excepciones COM del SAP
     Frontend Server traen descripción vacía).
     """
+
+    def setUp(self):
+        # Algunos tests verifican el fallback al árbol — forzamos T_CODE_SOX
+        # a None para que ese camino se ejecute. Los tests que verifican el
+        # modo T-code patchean explícitamente.
+        self._t_code_original = sox_report.T_CODE_SOX
+        sox_report.T_CODE_SOX = None
+
+    def tearDown(self):
+        sox_report.T_CODE_SOX = self._t_code_original
 
     def test_abrir_transaccion_raises_with_context_when_maximize_fails(self):
         session = MockSAPSession()

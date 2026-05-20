@@ -1,12 +1,22 @@
 """
 sox_report.py — Generación del Reporte SOX vía SAP GUI Scripting.
 
-Replica los pasos grabados en `resources/Scriptsox.vbs`. El flujo es:
-1. Maximizar ventana y navegar al nodo F00039 del árbol del menú SAP.
-2. Llenar Sociedad (P_BUKRS), rango de fechas (S_DATUM-LOW / S_DATUM-HIGH).
-3. Ejecutar el reporte (F8).
-4. Exportar a Excel vía menú contextual del grid (&MB_EXPORT → &XXL).
-5. Guardar el archivo en la carpeta destino (por default `salida/`).
+Replica los pasos grabados en `resources/Script2sox.vbs` (versión actual,
+con T-code y calendario F4) — reemplaza la grabación inicial fragil con
+nodos F00xxx del árbol que estaba en `resources/Scriptsox.vbs`.
+
+Flujo:
+1. Maximizar ventana y abrir la transacción SAP `AR15` vía okcd.
+2. Llenar Sociedad (P_BUKRS) — texto directo.
+3. Llenar Fecha Desde (S_DATUM-LOW) y Fecha Hasta (S_DATUM-HIGH) usando
+   el calendario emergente (sendVKey 4 → focusDate + selectionInterval
+   en formato yyyymmdd).
+4. Ejecutar el reporte (F8).
+5. (Opcional) Exportar a Excel vía menú contextual del grid
+   (&MB_EXPORT → &XXL) y guardar en `salida/`.
+   IMPORTANTE: el grid de AR15 usa otro shell ID que el del recording
+   original. Si la exportación falla, hay que re-grabar ese paso y
+   actualizar `DOCS_GRID_SHELL`.
 
 REQUISITOS DE EJECUCIÓN
 =======================
@@ -56,16 +66,32 @@ SOX_NODE_KEY = "F00039"
 # transacción (escribir el código en okcd y Enter) — no depende del árbol
 # del menú, que tiene IDs (F00xxx) inestables entre usuarios y sesiones.
 #
-# Si se deja en None, el script intentará navegar el árbol con SOX_NODE_KEY
-# (como el recording original); el árbol falla seguido en usuarios distintos
-# al que grabó el script. Configurar aquí la T-code real es la solución
-# recomendada (ej. "ZSOX_REPORT" o el código que tenga la transacción).
-T_CODE_SOX: str | None = None
+# Confirmado por `resources/Script2sox.vbs`: la T-code es AR15 (transacción
+# estándar SAP de "Origen de altas de inmovilizado" / "Asset History").
+# Si la T-code real de tu instalación es otra (variante Z*), ajustar aquí.
+#
+# Si se deja en None, el script hace fallback al árbol con SOX_NODE_KEY.
+T_CODE_SOX: str | None = "AR15"
+
+# Shell del calendario emergente que aparece al presionar F4 sobre un
+# campo de fecha de SAP. Vía: setFocus + sendVKey(4) sobre el campo →
+# foco/selección sobre este shell.
+CALENDAR_SHELL = "wnd[1]/usr/cntlCONTAINER/shellcont/shell"
+
+# Formato yyyymmdd que espera el calendario SAP para focusDate y
+# selectionInterval (distinto del dd.mm.aaaa del formulario).
+DATE_FORMAT_SAP_CALENDAR = "%Y%m%d"
 
 CAMPO_SOCIEDAD = "wnd[0]/usr/ctxtP_BUKRS"
 CAMPO_FECHA_DESDE = "wnd[0]/usr/ctxtS_DATUM-LOW"
 CAMPO_FECHA_HASTA = "wnd[0]/usr/ctxtS_DATUM-HIGH"
 
+# ATENCIÓN: este shell ID viene del recording original (Scriptsox.vbs) que
+# usaba el módulo SAPLBANK_OBJ_CHDOC. El nuevo recording (Script2sox.vbs)
+# usa la T-code AR15 cuyo grid de resultados es DIFERENTE (típicamente
+# SAPLSLVC_FULLSCREEN o similar). Si la exportación a Excel falla en la
+# laptop corporativa, hay que re-grabar la parte del export en SAP con
+# AR15 y actualizar este shell ID con el nuevo path.
 DOCS_GRID_SHELL = (
     "wnd[0]/usr/subDISPLAY:SAPLBANK_OBJ_CHDOC:0210/"
     "cntlCC_CHANGE_DOCUMENTS_SURVAY/shellcont/shell/shellcont[1]/shell"
@@ -299,10 +325,65 @@ def abrir_transaccion_sox(session) -> None:
         ) from exc
 
 
+def _seleccionar_fecha_calendario(
+    session, campo_id: str, fecha_str: str, etiqueta: str
+) -> None:
+    """Selecciona una fecha en SAP usando el calendario emergente F4.
+
+    Replica `resources/Script2sox.vbs`: foco en el campo → sendVKey(4) abre
+    el calendario en wnd[1] → setea focusDate y selectionInterval con la
+    fecha en formato yyyymmdd.
+
+    Args:
+        session: sesión SAP GUI.
+        campo_id: ID del campo de fecha (CAMPO_FECHA_DESDE / CAMPO_FECHA_HASTA).
+        fecha_str: fecha en formato dd.mm.aaaa (se convierte internamente).
+        etiqueta: nombre legible del campo para los logs (ej. "Desde").
+    """
+    fecha_sap = validar_fecha(fecha_str, etiqueta=etiqueta).strftime(
+        DATE_FORMAT_SAP_CALENDAR
+    )
+
+    campo = _ejecutar(
+        f"Localizar campo Fecha {etiqueta} ({campo_id})",
+        session.findById, campo_id,
+    )
+    _ejecutar(f"Foco en campo Fecha {etiqueta}", campo.setFocus)
+    _ejecutar(
+        f"Posicionar cursor en Fecha {etiqueta} (caretPosition=0)",
+        lambda: setattr(campo, "caretPosition", 0),
+    )
+
+    wnd = _ejecutar(
+        "Localizar ventana principal wnd[0]",
+        session.findById, "wnd[0]",
+    )
+    _ejecutar(
+        f"Abrir calendario emergente F4 para Fecha {etiqueta}",
+        wnd.sendVKey, 4,
+    )
+
+    calendario = _ejecutar(
+        f"Localizar calendario emergente ({CALENDAR_SHELL})",
+        session.findById, CALENDAR_SHELL,
+    )
+    _ejecutar(
+        f"Enfocar fecha {fecha_sap} en calendario",
+        lambda: setattr(calendario, "focusDate", fecha_sap),
+    )
+    _ejecutar(
+        f"Seleccionar intervalo {fecha_sap},{fecha_sap}",
+        lambda: setattr(
+            calendario, "selectionInterval", f"{fecha_sap},{fecha_sap}"
+        ),
+    )
+
+
 def ingresar_parametros(
     session, sociedad: str, fecha_desde: str, fecha_hasta: str
 ) -> None:
-    """Llena P_BUKRS, S_DATUM-LOW, S_DATUM-HIGH y ejecuta el reporte (F8)."""
+    """Llena P_BUKRS (texto directo), Fecha Desde/Hasta vía calendario F4 y
+    ejecuta el reporte (F8). Replica el flujo grabado en `Script2sox.vbs`."""
     _log(
         f"Paso 2/4: Ingresando sociedad='{sociedad}', "
         f"desde='{fecha_desde}', hasta='{fecha_hasta}'..."
@@ -317,27 +398,11 @@ def ingresar_parametros(
         lambda: setattr(sociedad_field, "text", sociedad),
     )
 
-    desde_field = _ejecutar(
-        f"Localizar campo Fecha Desde ({CAMPO_FECHA_DESDE})",
-        session.findById, CAMPO_FECHA_DESDE,
+    _seleccionar_fecha_calendario(
+        session, CAMPO_FECHA_DESDE, fecha_desde, "Desde"
     )
-    _ejecutar(
-        f"Asignar Fecha Desde = '{fecha_desde}'",
-        lambda: setattr(desde_field, "text", fecha_desde),
-    )
-
-    hasta_field = _ejecutar(
-        f"Localizar campo Fecha Hasta ({CAMPO_FECHA_HASTA})",
-        session.findById, CAMPO_FECHA_HASTA,
-    )
-    _ejecutar(
-        f"Asignar Fecha Hasta = '{fecha_hasta}'",
-        lambda: setattr(hasta_field, "text", fecha_hasta),
-    )
-    _ejecutar("Foco en campo Fecha Hasta", hasta_field.setFocus)
-    _ejecutar(
-        "Posicionar cursor en Fecha Hasta (caretPosition=5)",
-        lambda: setattr(hasta_field, "caretPosition", 5),
+    _seleccionar_fecha_calendario(
+        session, CAMPO_FECHA_HASTA, fecha_hasta, "Hasta"
     )
 
     _log("Paso 3/4: Ejecutando reporte (F8)...")
