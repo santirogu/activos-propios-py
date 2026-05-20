@@ -64,6 +64,8 @@ DEFAULT_SELECTED_ROW = 13  # SAP marca esta fila por default; deseleccionar prim
 SPECIFY_FILES_ROW = 6
 ASSIGN_FILES_ROW = 7
 READ_DATA_ROW = 8
+RUN_BI_ROW = 13  # también es DEFAULT_SELECTED_ROW; lo nombramos explícito
+                 # para hacer el flow determinista en step_run_batch_input.
 
 BDC_SESSION_TABLE = (
     "wnd[0]/usr/tabsD1000_TABSTRIP/tabpALLE/"
@@ -459,6 +461,38 @@ def _confirmar_popup_opcional(session, descripcion: str) -> None:
         _log(f"  → {descripcion}: sin popup, continuando")
 
 
+def _volver_al_step_list(session, max_intentos: int = 3) -> None:
+    """Garantiza que la sesión esté en la pantalla del step list de LSMW.
+
+    SAP a veces deja la sesión en una sub-pantalla (Generate BI Folder,
+    Read Data results, etc.) en vez de auto-retornar al step list tras
+    confirmar un popup. Este helper intenta encontrar la tabla del step
+    list y, si no la encuentra, envía Back (F3) hasta llegar — con un
+    límite de intentos para evitar bucles infinitos (ej. si se exit de
+    LSMW por error).
+    """
+    for intento in range(max_intentos):
+        try:
+            session.findById(LSMW_STEPLIST_TABLE)
+            if intento > 0:
+                _log(f"  → Step list alcanzado tras {intento} Back(s)")
+            else:
+                _log("  → Ya estamos en el step list")
+            return
+        except Exception:
+            _log(f"  → No en step list (intento {intento + 1}), enviando Back...")
+            try:
+                session.findById("wnd[0]").sendVKey(3)
+            except Exception as exc:
+                _log(f"    Back falló: {exc!r}")
+                break
+    raise RuntimeError(
+        f"No se pudo volver al step list de LSMW después de {max_intentos} "
+        f"intentos de Back. La pantalla actual no es la esperada — "
+        f"verifica que SAP siga en LSMW y no haya cambiado de transacción."
+    )
+
+
 def step_assign_files(session) -> None:
     """Abre y cierra el paso "Assign Files"."""
     _log("Paso 3/10: Asignando archivo a estructura (Assign Files)...")
@@ -532,7 +566,12 @@ def step_display_converted_data(session) -> None:
 
 
 def step_create_batch_input(session) -> None:
-    """Paso "Create Batch Input Session" — marca P_KEEP y crea la sesión."""
+    """Paso "Create Batch Input Session" — marca P_KEEP y crea la sesión.
+
+    Tras confirmar el popup, garantiza el regreso al step list (SAP a veces
+    deja la sesión en la pantalla "Generate Batch Input Folder" sin
+    auto-retornar — fuente de flakiness para el paso 9).
+    """
     _log("Paso 8/10: Creando sesión Batch Input (Create BI Session)...")
     boton_exec = _ejecutar(
         "Localizar botón Execute (wnd[0]/tbar[1]/btn[32])",
@@ -554,11 +593,18 @@ def step_create_batch_input(session) -> None:
     )
     _ejecutar("Pulsar F8 para crear la sesión BDC", boton_f8.press)
     _confirmar_popup_opcional(session, "Confirmar 'sesión BDC creada'")
+    _log("  → Asegurando retorno al step list antes del paso 9...")
+    _volver_al_step_list(session)
 
 
 def step_run_batch_input(session) -> None:
-    """Paso "Run Batch Input Session" — abre el listado de sesiones BDC."""
+    """Paso "Run Batch Input Session" — abre el listado de sesiones BDC.
+
+    Selecciona explícitamente la fila 13 (Run BI) en vez de confiar en
+    el auto-advance del cursor de SAP — más determinista entre corridas.
+    """
     _log("Paso 9/10: Abriendo lista de sesiones BDC (Run BI Session)...")
+    select_step_row(session, RUN_BI_ROW)
     boton_exec = _ejecutar(
         "Localizar botón Execute (wnd[0]/tbar[1]/btn[32])",
         session.findById, "wnd[0]/tbar[1]/btn[32]",

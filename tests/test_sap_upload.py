@@ -538,15 +538,84 @@ class StepCreateBatchInputTest(unittest.TestCase):
         self.assertIn(("wnd[1]", "sendVKey", 0), session.actions)
 
 
+class VolverAlStepListTest(unittest.TestCase):
+    """_volver_al_step_list garantiza que la sesión esté en el step list,
+    enviando Back hasta llegar (con límite de intentos)."""
+
+    def test_no_op_when_already_on_step_list(self):
+        """Si la tabla del step list está accesible, no se envía Back."""
+        from sap_upload import _volver_al_step_list, LSMW_STEPLIST_TABLE
+
+        session = MockSAPSession()
+        # Asegura que LSMW_STEPLIST_TABLE existe
+        session.findById(LSMW_STEPLIST_TABLE)
+        _volver_al_step_list(session)
+
+        # No se debe haber enviado ningún sendVKey 3
+        backs = [a for a in session.actions if a == ("wnd[0]", "sendVKey", 3)]
+        self.assertEqual(len(backs), 0)
+
+    def test_sends_back_when_not_on_step_list(self):
+        """Si LSMW_STEPLIST_TABLE no existe inicialmente, envía Back hasta
+        encontrarla."""
+        from sap_upload import _volver_al_step_list, LSMW_STEPLIST_TABLE
+
+        session = MockSAPSession()
+        original_find = session.findById
+        attempts = [0]
+
+        def find_failing_first_attempt(sap_id):
+            if sap_id == LSMW_STEPLIST_TABLE and attempts[0] == 0:
+                attempts[0] += 1
+                raise Exception("no estamos en step list todavía")
+            return original_find(sap_id)
+
+        session.findById = find_failing_first_attempt
+        _volver_al_step_list(session)
+
+        backs = [a for a in session.actions if a == ("wnd[0]", "sendVKey", 3)]
+        self.assertGreaterEqual(len(backs), 1)
+
+    def test_raises_when_step_list_never_appears(self):
+        """Si tras max_intentos seguimos sin step list, lanza RuntimeError
+        con mensaje accionable."""
+        from sap_upload import _volver_al_step_list, LSMW_STEPLIST_TABLE
+
+        session = MockSAPSession()
+
+        def always_fails(sap_id):
+            if sap_id == LSMW_STEPLIST_TABLE:
+                raise Exception("nunca llegamos")
+            # Para que sendVKey funcione, devolver el wnd normalmente
+            return MockSAPSession.findById(session, sap_id)
+
+        # Necesitamos un wnd[0] real para sendVKey, pero hacer fallar
+        # LSMW_STEPLIST_TABLE. Usamos un closure.
+        original_find = MockSAPSession.findById
+
+        def fake_find(self_sess, sap_id):
+            if sap_id == LSMW_STEPLIST_TABLE:
+                raise Exception("nunca llegamos")
+            return original_find(self_sess, sap_id)
+
+        session.findById = lambda sid: fake_find(session, sid)
+
+        with self.assertRaisesRegex(RuntimeError, "step list de LSMW"):
+            _volver_al_step_list(session, max_intentos=3)
+
+
 class StepRunBatchInputTest(unittest.TestCase):
-    def test_presses_execute(self):
+    def test_selects_run_bi_row_and_presses_execute(self):
         session = MockSAPSession()
         step_run_batch_input(session)
 
-        self.assertEqual(
-            session.actions,
-            [("wnd[0]/tbar[1]/btn[32]", "press")],
-        )
+        # Debe seleccionar explícitamente la fila 13 (Run BI) y luego
+        # presionar Execute. El select_step_row interno emite varias
+        # acciones; verificamos las clave.
+        from sap_upload import RUN_BI_ROW, LSMW_STEPLIST_TABLE
+        steplist = session._elements[LSMW_STEPLIST_TABLE]
+        self.assertTrue(steplist._rows[RUN_BI_ROW]._selected)
+        self.assertIn(("wnd[0]/tbar[1]/btn[32]", "press"), session.actions)
 
 
 class ProcessBdcSessionTest(unittest.TestCase):
