@@ -483,11 +483,38 @@ def control_sox(root: tk.Tk) -> tk.Toplevel:
     return dialog
 
 
+def _test_conexion_sap_handler() -> None:
+    """Handler del botón "Test conexión SAP". Llama a
+    `diagnosticar_conexion_sap` y muestra el resultado en un messagebox.
+    """
+    try:
+        from sap_upload import diagnosticar_conexion_sap
+    except ImportError as exc:
+        messagebox.showerror(
+            "Error de import",
+            f"No se pudo importar sap_upload:\n{exc}",
+        )
+        return
+
+    try:
+        ok, mensaje = diagnosticar_conexion_sap()
+    except Exception as exc:
+        _show_unexpected_error("Error en test de conexión SAP", exc)
+        return
+
+    _log(f"Test conexión SAP → ok={ok}")
+    print(mensaje, flush=True)
+    if ok:
+        messagebox.showinfo("Test conexión SAP — OK", mensaje)
+    else:
+        messagebox.showwarning("Test conexión SAP — Problema", mensaje)
+
+
 def main() -> None:
     root = tk.Tk()
     _install_tk_exception_handler(root)
     root.title("Creación Activos SAP")
-    root.geometry("480x320")
+    root.geometry("480x380")
     root.resizable(False, False)
 
     title = tk.Label(
@@ -540,7 +567,21 @@ def main() -> None:
         width=24,
         command=lambda: control_sox(root),
     )
-    btn_sox.pack()
+    btn_sox.pack(pady=(0, 12))
+
+    # Botón de diagnóstico: verifica si la conexión a SAP está disponible
+    # sin ejecutar un flujo completo. Estilo secundario (más pequeño) para
+    # marcar que es una herramienta de troubleshooting, no de uso normal.
+    btn_test = tk.Button(
+        root,
+        text="Test conexión SAP",
+        font=("Helvetica", 9),
+        fg="#555",
+        padx=10,
+        pady=2,
+        command=_test_conexion_sap_handler,
+    )
+    btn_test.pack()
 
     status = tk.Label(
         root,

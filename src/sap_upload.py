@@ -141,6 +141,110 @@ def get_sap_session():
     return connection.Children(0)
 
 
+def diagnosticar_conexion_sap() -> tuple[bool, str]:
+    """Verifica el estado de la conexión SAP GUI sin ejecutar ningún flujo.
+
+    Útil como botón "Test conexión SAP" para diagnosticar cuando los
+    botones de carga (Subir a SAP / Generar Reporte SOX) fallan al
+    conectar. Reporta exactamente qué encontró:
+      - pywin32 ausente
+      - SAP GUI no abierto / COM inaccesible
+      - Scripting Engine deshabilitado
+      - Sin conexiones activas / sin sesiones iniciadas
+      - Conexiones y sesiones detectadas (con detalle de cada una)
+
+    Returns:
+        Tupla (ok, mensaje). `ok=True` si hay al menos una sesión SAP
+        activa lista para usarse; en caso contrario `ok=False` con un
+        mensaje detallado y accionable.
+    """
+    try:
+        import win32com.client  # type: ignore
+    except ImportError as exc:
+        return False, (
+            "Falta la dependencia pywin32.\n\n"
+            "Instalar con:\n"
+            "    pip install pywin32\n\n"
+            f"Detalle: {exc}"
+        )
+
+    try:
+        sap_gui_auto = win32com.client.GetObject("SAPGUI")
+    except Exception as exc:
+        return False, (
+            "No se pudo acceder al objeto COM 'SAPGUI'.\n\n"
+            "Causas más probables:\n"
+            "  • SAP GUI for Windows no está abierto en este momento.\n"
+            "  • SAP GUI se cerró/crasheó silenciosamente.\n"
+            "  • Python y SAP GUI corren en contextos distintos\n"
+            "    (uno como administrador y el otro no — COM no los une).\n\n"
+            f"Detalle técnico: {exc!r}"
+        )
+
+    try:
+        application = sap_gui_auto.GetScriptingEngine
+    except Exception as exc:
+        return False, (
+            "SAP GUI está corriendo pero el Scripting Engine no responde.\n\n"
+            "Verifica en SAP GUI:\n"
+            "  Options → Accessibility & Scripting → Scripting →\n"
+            "  'Enable scripting' debe estar marcado.\n\n"
+            f"Detalle: {exc!r}"
+        )
+
+    num_conexiones = application.Children.Count
+    if num_conexiones == 0:
+        return False, (
+            "SAP GUI está corriendo y el scripting habilitado, pero NO\n"
+            "hay ninguna conexión activa al servidor SAP.\n\n"
+            "Abre una conexión desde el SAP Logon Pad."
+        )
+
+    lineas = [f"Conexiones SAP detectadas: {num_conexiones}"]
+    total_sesiones = 0
+
+    for i in range(num_conexiones):
+        try:
+            connection = application.Children(i)
+            num_sesiones = connection.Children.Count
+            total_sesiones += num_sesiones
+            lineas.append(f"  Conexión [{i}]: {num_sesiones} sesión(es)")
+
+            for j in range(num_sesiones):
+                try:
+                    session = connection.Children(j)
+                    info = session.Info
+                    lineas.append(
+                        f"    Sesión [{j}]: "
+                        f"sistema={info.SystemName}, "
+                        f"client={info.Client}, "
+                        f"user={info.User}"
+                    )
+                except Exception:
+                    lineas.append(f"    Sesión [{j}]: (info no disponible)")
+        except Exception as exc:
+            lineas.append(f"  Conexión [{i}]: (no se pudo leer — {exc!r})")
+
+    if total_sesiones == 0:
+        return False, "\n".join(
+            lineas
+            + [
+                "",
+                "ATENCIÓN: hay conexión pero NO hay sesiones iniciadas.",
+                "Inicia sesión en el sistema SAP antes de correr los flujos.",
+            ]
+        )
+
+    return True, "\n".join(
+        lineas
+        + [
+            "",
+            f"OK — SAP está accesible. {total_sesiones} sesión(es) lista(s).",
+            "Los botones 'Subir a SAP' y 'Generar Reporte SOX' pueden ejecutarse.",
+        ]
+    )
+
+
 # ---------------------------------------------------------------------------
 # FLUJO LSMW
 # ---------------------------------------------------------------------------

@@ -227,6 +227,129 @@ class GetSapSessionTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+class DiagnosticarConexionSapTest(unittest.TestCase):
+    """Pruebas para `diagnosticar_conexion_sap`, el helper del botón
+    'Test conexión SAP' que devuelve (ok, mensaje detallado)."""
+
+    def _make_fake_win32(self, engine):
+        fake_win32 = MagicMock()
+        sap_gui_auto = MagicMock()
+        sap_gui_auto.GetScriptingEngine = engine
+        fake_win32.client.GetObject.return_value = sap_gui_auto
+        return fake_win32
+
+    def test_returns_false_when_pywin32_missing(self):
+        with patch.dict(sys.modules, {"win32com": None, "win32com.client": None}):
+            ok, mensaje = sap_upload.diagnosticar_conexion_sap()
+        self.assertFalse(ok)
+        self.assertIn("pywin32", mensaje)
+        self.assertIn("pip install pywin32", mensaje)
+
+    def test_returns_false_when_sap_gui_not_running(self):
+        fake_win32 = MagicMock()
+        fake_win32.client.GetObject.side_effect = Exception("class not registered")
+        with patch.dict(sys.modules, {
+            "win32com": fake_win32,
+            "win32com.client": fake_win32.client,
+        }):
+            ok, mensaje = sap_upload.diagnosticar_conexion_sap()
+        self.assertFalse(ok)
+        self.assertIn("COM", mensaje)
+        self.assertIn("class not registered", mensaje)
+
+    def test_returns_false_when_scripting_engine_fails(self):
+        sap_gui_auto = MagicMock()
+        # GetScriptingEngine returns a property-like object that raises
+        type(sap_gui_auto).GetScriptingEngine = property(
+            lambda self: (_ for _ in ()).throw(Exception("scripting disabled"))
+        )
+        fake_win32 = MagicMock()
+        fake_win32.client.GetObject.return_value = sap_gui_auto
+        with patch.dict(sys.modules, {
+            "win32com": fake_win32,
+            "win32com.client": fake_win32.client,
+        }):
+            ok, mensaje = sap_upload.diagnosticar_conexion_sap()
+        self.assertFalse(ok)
+        self.assertIn("Scripting Engine", mensaje)
+
+    def test_returns_false_when_no_connections(self):
+        engine = MagicMock()
+        engine.Children.Count = 0
+        fake_win32 = self._make_fake_win32(engine)
+        with patch.dict(sys.modules, {
+            "win32com": fake_win32,
+            "win32com.client": fake_win32.client,
+        }):
+            ok, mensaje = sap_upload.diagnosticar_conexion_sap()
+        self.assertFalse(ok)
+        self.assertIn("conexión", mensaje.lower())
+        self.assertIn("Logon Pad", mensaje)
+
+    def test_returns_false_when_no_sessions(self):
+        connection = MagicMock()
+        connection.Children.Count = 0
+        engine = MagicMock()
+        engine.Children.Count = 1
+        engine.Children.return_value = connection
+        fake_win32 = self._make_fake_win32(engine)
+        with patch.dict(sys.modules, {
+            "win32com": fake_win32,
+            "win32com.client": fake_win32.client,
+        }):
+            ok, mensaje = sap_upload.diagnosticar_conexion_sap()
+        self.assertFalse(ok)
+        self.assertIn("NO hay sesiones", mensaje)
+        self.assertIn("Inicia sesión", mensaje)
+
+    def test_returns_true_with_session_info(self):
+        info = MagicMock()
+        info.SystemName = "PRD"
+        info.Client = "100"
+        info.User = "SROCK"
+        session = MagicMock()
+        type(session).Info = property(lambda self: info)
+        connection = MagicMock()
+        connection.Children.Count = 1
+        connection.Children.return_value = session
+        engine = MagicMock()
+        engine.Children.Count = 1
+        engine.Children.return_value = connection
+        fake_win32 = self._make_fake_win32(engine)
+        with patch.dict(sys.modules, {
+            "win32com": fake_win32,
+            "win32com.client": fake_win32.client,
+        }):
+            ok, mensaje = sap_upload.diagnosticar_conexion_sap()
+        self.assertTrue(ok)
+        self.assertIn("OK", mensaje)
+        self.assertIn("sistema=PRD", mensaje)
+        self.assertIn("client=100", mensaje)
+        self.assertIn("user=SROCK", mensaje)
+
+    def test_returns_true_when_session_info_unavailable(self):
+        """Si session.Info lanza excepción, debe seguir reportando OK
+        siempre que haya al menos una sesión visible."""
+        session = MagicMock()
+        type(session).Info = property(
+            lambda self: (_ for _ in ()).throw(Exception("denied"))
+        )
+        connection = MagicMock()
+        connection.Children.Count = 1
+        connection.Children.return_value = session
+        engine = MagicMock()
+        engine.Children.Count = 1
+        engine.Children.return_value = connection
+        fake_win32 = self._make_fake_win32(engine)
+        with patch.dict(sys.modules, {
+            "win32com": fake_win32,
+            "win32com.client": fake_win32.client,
+        }):
+            ok, mensaje = sap_upload.diagnosticar_conexion_sap()
+        self.assertTrue(ok)
+        self.assertIn("info no disponible", mensaje)
+
+
 class OpenLsmwTest(unittest.TestCase):
     def test_maximizes_window_sets_okcd_and_executes(self):
         session = MockSAPSession()

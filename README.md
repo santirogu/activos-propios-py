@@ -109,6 +109,16 @@ python src/sox_report.py ISA 01.05.2026 31.05.2026
 
 ### Debugging y logs
 
+La ventana principal incluye un botón pequeño **"Test conexión SAP"** que verifica el estado de la conexión SAP GUI sin ejecutar ningún flujo. Reporta qué encontró:
+
+- pywin32 ausente
+- SAP GUI no abierto / COM inaccesible
+- Scripting Engine deshabilitado
+- Sin conexiones / sin sesiones iniciadas
+- Conexiones detectadas (con sistema/client/user de cada sesión)
+
+Útil para diagnosticar cuando los botones "Subir a SAP" o "Generar Reporte SOX" fallan en la conexión.
+
 La app imprime logs con timestamp `[HH:MM:SS]` cada vez que se presiona un botón, describe lo que está haciendo (validaciones, archivos previos, extracción, etc.). Para verlos en tiempo real, ejecutar desde un terminal:
 
 ```bash

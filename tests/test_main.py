@@ -373,6 +373,57 @@ class InstallTkExceptionHandlerTest(unittest.TestCase):
         self.assertIn("uncaught en callback", message)
 
 
+class TestConexionSapHandlerTest(unittest.TestCase):
+    """Pruebas del handler del botón 'Test conexión SAP'."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_shows_info_messagebox_on_success(self) -> None:
+        with patch(
+            "sap_upload.diagnosticar_conexion_sap",
+            return_value=(True, "Todo OK\nSesión: PRD/100/SROCK"),
+        ), patch("main.messagebox.showinfo") as mock_info, \
+             patch("main.messagebox.showwarning") as mock_warn:
+            main._test_conexion_sap_handler()
+
+        mock_info.assert_called_once()
+        title, message = mock_info.call_args[0][:2]
+        self.assertEqual(title, "Test conexión SAP — OK")
+        self.assertIn("Sesión: PRD/100/SROCK", message)
+        mock_warn.assert_not_called()
+
+    def test_shows_warning_messagebox_on_failure(self) -> None:
+        with patch(
+            "sap_upload.diagnosticar_conexion_sap",
+            return_value=(False, "SAP no abierto"),
+        ), patch("main.messagebox.showwarning") as mock_warn, \
+             patch("main.messagebox.showinfo") as mock_info:
+            main._test_conexion_sap_handler()
+
+        mock_warn.assert_called_once()
+        title, message = mock_warn.call_args[0][:2]
+        self.assertEqual(title, "Test conexión SAP — Problema")
+        self.assertIn("SAP no abierto", message)
+        mock_info.assert_not_called()
+
+    def test_catches_unexpected_exception_and_shows_error(self) -> None:
+        with patch(
+            "sap_upload.diagnosticar_conexion_sap",
+            side_effect=RuntimeError("crash inesperado"),
+        ), patch("main.messagebox.showerror") as mock_err:
+            main._test_conexion_sap_handler()
+
+        mock_err.assert_called_once()
+        title, message = mock_err.call_args[0][:2]
+        self.assertEqual(title, "Error en test de conexión SAP")
+        self.assertIn("crash inesperado", message)
+
+
 class _SyncFakeThread:
     """Reemplaza threading.Thread para ejecutar el target de forma síncrona."""
 
