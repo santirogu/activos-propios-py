@@ -426,17 +426,25 @@ def configurar_ruta_archivo(session, carpeta: str, nombre_archivo: str) -> None:
     )
     _ejecutar("Pulsar OK del modal", ok_modal.press)
 
-    # Volver al step list y confirmar guardar cambios
+    # Volver al step list. Si SAP detecta cambios pendientes muestra un
+    # popup "¿Guardar?", pero si la ruta/nombre ya era el mismo (corrida
+    # previa con el mismo archivo) SAP vuelve directo al step list sin
+    # popup. Por eso el click en 'Sí' es condicional.
     btn_back = _ejecutar(
         "Localizar botón Back (wnd[0]/tbar[0]/btn[3])",
         session.findById, "wnd[0]/tbar[0]/btn[3]",
     )
     _ejecutar("Pulsar Back para volver al step list", btn_back.press)
-    btn_guardar = _ejecutar(
-        "Localizar 'Sí' del popup de guardar (wnd[1]/usr/btnSPOP-OPTION1)",
-        session.findById, "wnd[1]/usr/btnSPOP-OPTION1",
-    )
-    _ejecutar("Pulsar 'Sí' para guardar cambios", btn_guardar.press)
+
+    try:
+        btn_guardar = session.findById("wnd[1]/usr/btnSPOP-OPTION1")
+        _log("  → Popup de guardar cambios detectado, confirmando con 'Sí'")
+        btn_guardar.press()
+    except Exception:
+        _log(
+            "  → Sin popup de guardar (no había cambios pendientes), "
+            "continuando al step list"
+        )
 
 
 def step_assign_files(session) -> None:
