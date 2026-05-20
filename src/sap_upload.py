@@ -447,87 +447,183 @@ def configurar_ruta_archivo(session, carpeta: str, nombre_archivo: str) -> None:
         )
 
 
+def _confirmar_popup_opcional(session, descripcion: str) -> None:
+    """Intenta enviar Enter a `wnd[1]` para confirmar un popup. Si el popup
+    no existe (porque SAP no lo mostró esta vez), loguea y continúa sin
+    romper. Patrón clave para hacer el flujo resistente a popups
+    condicionales que aparecen solo en ciertos estados."""
+    try:
+        session.findById("wnd[1]").sendVKey(0)
+        _log(f"  → {descripcion}: popup detectado y confirmado con Enter")
+    except Exception:
+        _log(f"  → {descripcion}: sin popup, continuando")
+
+
 def step_assign_files(session) -> None:
     """Abre y cierra el paso "Assign Files"."""
     _log("Paso 3/10: Asignando archivo a estructura (Assign Files)...")
     select_step_row(session, ASSIGN_FILES_ROW)
-    session.findById("wnd[0]/tbar[1]/btn[32]").press()
-    session.findById("wnd[0]").sendVKey(3)              # F3 — Back
+    boton_exec = _ejecutar(
+        "Localizar botón Execute (F6 = wnd[0]/tbar[1]/btn[32])",
+        session.findById, "wnd[0]/tbar[1]/btn[32]",
+    )
+    _ejecutar("Pulsar Execute en step list", boton_exec.press)
+    wnd = _ejecutar("Localizar wnd[0]", session.findById, "wnd[0]")
+    _ejecutar("Pulsar F3 (Back, sendVKey 3)", wnd.sendVKey, 3)
 
 
 def step_read_data(session) -> None:
     """Ejecuta el paso "Read Data" — lee el .txt desde la ruta configurada."""
     _log("Paso 4/10: Leyendo datos del archivo .txt (Read Data)...")
     select_step_row(session, READ_DATA_ROW)
-    session.findById("wnd[0]/tbar[1]/btn[32]").press()
-    session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8 — ejecutar lectura
-    session.findById("wnd[0]").sendVKey(3)
-    session.findById("wnd[0]").sendVKey(3)
+    boton_exec = _ejecutar(
+        "Localizar botón Execute (wnd[0]/tbar[1]/btn[32])",
+        session.findById, "wnd[0]/tbar[1]/btn[32]",
+    )
+    _ejecutar("Pulsar Execute en step list", boton_exec.press)
+    boton_f8 = _ejecutar(
+        "Localizar F8 (wnd[0]/tbar[1]/btn[8])",
+        session.findById, "wnd[0]/tbar[1]/btn[8]",
+    )
+    _ejecutar("Pulsar F8 para leer datos", boton_f8.press)
+    wnd = _ejecutar("Localizar wnd[0]", session.findById, "wnd[0]")
+    _ejecutar("Pulsar Back (sendVKey 3)", wnd.sendVKey, 3)
+    _ejecutar("Pulsar Back otra vez (sendVKey 3)", wnd.sendVKey, 3)
 
 
 def step_display_read_data(session) -> None:
     """Paso "Display Read Data" — confirma popup y vuelve."""
     _log("Paso 5/10: Verificando datos leídos (Display Read Data)...")
-    session.findById("wnd[0]/tbar[1]/btn[32]").press()
-    session.findById("wnd[1]").sendVKey(0)              # Confirma popup
-    session.findById("wnd[0]").sendVKey(3)
+    boton_exec = _ejecutar(
+        "Localizar botón Execute (wnd[0]/tbar[1]/btn[32])",
+        session.findById, "wnd[0]/tbar[1]/btn[32]",
+    )
+    _ejecutar("Pulsar Execute en step list", boton_exec.press)
+    _confirmar_popup_opcional(session, "Confirmar popup de visualización")
+    wnd = _ejecutar("Localizar wnd[0]", session.findById, "wnd[0]")
+    _ejecutar("Pulsar Back (sendVKey 3)", wnd.sendVKey, 3)
 
 
 def step_convert_data(session) -> None:
     """Paso "Convert Data" — convierte los datos leídos."""
     _log("Paso 6/10: Convirtiendo datos al formato SAP (Convert Data)...")
-    session.findById("wnd[0]/tbar[1]/btn[32]").press()
-    session.findById("wnd[0]").sendVKey(8)              # F8 — ejecutar conversión
-    session.findById("wnd[0]").sendVKey(3)
-    session.findById("wnd[0]").sendVKey(3)
+    boton_exec = _ejecutar(
+        "Localizar botón Execute (wnd[0]/tbar[1]/btn[32])",
+        session.findById, "wnd[0]/tbar[1]/btn[32]",
+    )
+    _ejecutar("Pulsar Execute en step list", boton_exec.press)
+    wnd = _ejecutar("Localizar wnd[0]", session.findById, "wnd[0]")
+    _ejecutar("Pulsar F8 (sendVKey 8) para convertir", wnd.sendVKey, 8)
+    _ejecutar("Pulsar Back (sendVKey 3)", wnd.sendVKey, 3)
+    _ejecutar("Pulsar Back otra vez (sendVKey 3)", wnd.sendVKey, 3)
 
 
 def step_display_converted_data(session) -> None:
     """Paso "Display Converted Data" — confirma popup y vuelve."""
     _log("Paso 7/10: Verificando datos convertidos (Display Converted Data)...")
-    session.findById("wnd[0]/tbar[1]/btn[32]").press()
-    session.findById("wnd[1]").sendVKey(0)
-    session.findById("wnd[0]").sendVKey(3)
+    boton_exec = _ejecutar(
+        "Localizar botón Execute (wnd[0]/tbar[1]/btn[32])",
+        session.findById, "wnd[0]/tbar[1]/btn[32]",
+    )
+    _ejecutar("Pulsar Execute en step list", boton_exec.press)
+    _confirmar_popup_opcional(session, "Confirmar popup de visualización")
+    wnd = _ejecutar("Localizar wnd[0]", session.findById, "wnd[0]")
+    _ejecutar("Pulsar Back (sendVKey 3)", wnd.sendVKey, 3)
 
 
 def step_create_batch_input(session) -> None:
     """Paso "Create Batch Input Session" — marca P_KEEP y crea la sesión."""
     _log("Paso 8/10: Creando sesión Batch Input (Create BI Session)...")
-    session.findById("wnd[0]/tbar[1]/btn[32]").press()
-    keep_checkbox = session.findById("wnd[0]/usr/chkP_KEEP")
-    keep_checkbox.selected = True
-    keep_checkbox.setFocus()
-    session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8 — crea la sesión BDC
-    session.findById("wnd[1]").sendVKey(0)              # Confirma popup
+    boton_exec = _ejecutar(
+        "Localizar botón Execute (wnd[0]/tbar[1]/btn[32])",
+        session.findById, "wnd[0]/tbar[1]/btn[32]",
+    )
+    _ejecutar("Pulsar Execute en step list", boton_exec.press)
+    keep_checkbox = _ejecutar(
+        "Localizar checkbox 'Keep batch input folder' (wnd[0]/usr/chkP_KEEP)",
+        session.findById, "wnd[0]/usr/chkP_KEEP",
+    )
+    _ejecutar(
+        "Marcar checkbox 'Keep batch input folder'",
+        lambda: setattr(keep_checkbox, "selected", True),
+    )
+    _ejecutar("Foco en checkbox Keep", keep_checkbox.setFocus)
+    boton_f8 = _ejecutar(
+        "Localizar F8 (wnd[0]/tbar[1]/btn[8])",
+        session.findById, "wnd[0]/tbar[1]/btn[8]",
+    )
+    _ejecutar("Pulsar F8 para crear la sesión BDC", boton_f8.press)
+    _confirmar_popup_opcional(session, "Confirmar 'sesión BDC creada'")
 
 
 def step_run_batch_input(session) -> None:
     """Paso "Run Batch Input Session" — abre el listado de sesiones BDC."""
     _log("Paso 9/10: Abriendo lista de sesiones BDC (Run BI Session)...")
-    session.findById("wnd[0]/tbar[1]/btn[32]").press()
+    boton_exec = _ejecutar(
+        "Localizar botón Execute (wnd[0]/tbar[1]/btn[32])",
+        session.findById, "wnd[0]/tbar[1]/btn[32]",
+    )
+    _ejecutar("Pulsar Execute en step list", boton_exec.press)
 
 
 def process_bdc_session(session) -> None:
     """Procesa la sesión BDC recién creada en modo error + log completo."""
     _log("Paso 10/10: Procesando sesión BDC en modo error + log completo...")
-    table = session.findById(BDC_SESSION_TABLE)
-    table.getAbsoluteRow(0).selected = True
-
-    group_cell = session.findById(
-        f"{BDC_SESSION_TABLE}/txtITAB_APQI-GROUPID[0,0]"
+    table = _ejecutar(
+        f"Localizar tabla de sesiones BDC ({BDC_SESSION_TABLE})",
+        session.findById, BDC_SESSION_TABLE,
     )
-    group_cell.setFocus()
-    group_cell.caretPosition = 0
+    _ejecutar(
+        "Seleccionar primera fila de la tabla BDC",
+        lambda: setattr(table.getAbsoluteRow(0), "selected", True),
+    )
 
-    session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8 — Process
+    group_cell_id = f"{BDC_SESSION_TABLE}/txtITAB_APQI-GROUPID[0,0]"
+    group_cell = _ejecutar(
+        f"Localizar celda GROUPID ({group_cell_id})",
+        session.findById, group_cell_id,
+    )
+    _ejecutar("Foco en celda GROUPID", group_cell.setFocus)
+    _ejecutar(
+        "Cursor en GROUPID (caretPosition=0)",
+        lambda: setattr(group_cell, "caretPosition", 0),
+    )
+
+    boton_f8 = _ejecutar(
+        "Localizar F8 (wnd[0]/tbar[1]/btn[8])",
+        session.findById, "wnd[0]/tbar[1]/btn[8]",
+    )
+    _ejecutar("Pulsar F8 (procesar sesión)", boton_f8.press)
 
     # Diálogo de procesamiento: modo error + log all + expert
-    session.findById("wnd[1]/usr/radD0300-ERROR").select()
-    session.findById("wnd[1]/usr/chkD0300-LOGALL").selected = True
-    session.findById("wnd[1]/usr/chkD0300-EXPERT").selected = True
-    session.findById("wnd[1]/usr/chkD0300-EXPERT").setFocus()
-    session.findById("wnd[1]/tbar[0]/btn[0]").press()   # OK
-    session.findById("wnd[1]/tbar[0]/btn[0]").press()   # OK confirmar
+    rad_error = _ejecutar(
+        "Localizar radio 'Error mode' (wnd[1]/usr/radD0300-ERROR)",
+        session.findById, "wnd[1]/usr/radD0300-ERROR",
+    )
+    _ejecutar("Seleccionar modo Error", rad_error.select)
+    chk_logall = _ejecutar(
+        "Localizar checkbox 'Log All' (wnd[1]/usr/chkD0300-LOGALL)",
+        session.findById, "wnd[1]/usr/chkD0300-LOGALL",
+    )
+    _ejecutar(
+        "Marcar 'Log All'",
+        lambda: setattr(chk_logall, "selected", True),
+    )
+    chk_expert = _ejecutar(
+        "Localizar checkbox 'Expert mode' (wnd[1]/usr/chkD0300-EXPERT)",
+        session.findById, "wnd[1]/usr/chkD0300-EXPERT",
+    )
+    _ejecutar(
+        "Marcar 'Expert mode'",
+        lambda: setattr(chk_expert, "selected", True),
+    )
+    _ejecutar("Foco en 'Expert mode'", chk_expert.setFocus)
+    boton_ok = _ejecutar(
+        "Localizar OK del diálogo (wnd[1]/tbar[0]/btn[0])",
+        session.findById, "wnd[1]/tbar[0]/btn[0]",
+    )
+    _ejecutar("Pulsar OK del diálogo (1ra vez)", boton_ok.press)
+    _ejecutar("Pulsar OK del diálogo (2da vez, confirmar)", boton_ok.press)
 
 
 def run_lsmw_flow(session, carpeta: str, nombre_archivo: str) -> None:
