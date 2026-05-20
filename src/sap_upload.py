@@ -75,6 +75,21 @@ BDC_SESSION_TABLE = (
 # LOGGING
 # ---------------------------------------------------------------------------
 
+def _ejecutar(descripcion: str, fn, *args, **kwargs):
+    """Ejecuta `fn(*args, **kwargs)` loguenado la operación. Si falla,
+    re-lanza con un mensaje descriptivo que dice exactamente qué intentaba
+    hacer — clave porque las excepciones COM del SAP Frontend Server
+    suelen venir con descripción vacía o genérica."""
+    _log(f"  → {descripcion}")
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Falló: {descripcion}\n"
+            f"Detalle técnico SAP: {exc!r}"
+        ) from exc
+
+
 def _log(mensaje: str) -> None:
     """Imprime un mensaje con timestamp para seguimiento de la ejecución.
 
@@ -261,24 +276,55 @@ def diagnosticar_conexion_sap() -> tuple[bool, str]:
 
 def select_step_row(session, row: int) -> None:
     """Selecciona una fila concreta del step list, deseleccionando la default."""
-    table = session.findById(LSMW_STEPLIST_TABLE)
-    table.getAbsoluteRow(DEFAULT_SELECTED_ROW).selected = False
-    table.getAbsoluteRow(row).selected = True
-    cell = session.findById(
-        f"{LSMW_STEPLIST_TABLE}/txtGT_STEPLIST-STEPTEXT[0,{row}]"
+    table = _ejecutar(
+        f"Localizar tabla del step list ({LSMW_STEPLIST_TABLE})",
+        session.findById, LSMW_STEPLIST_TABLE,
     )
-    cell.setFocus()
-    cell.caretPosition = 0
+    _ejecutar(
+        f"Deseleccionar fila default [{DEFAULT_SELECTED_ROW}]",
+        lambda: setattr(
+            table.getAbsoluteRow(DEFAULT_SELECTED_ROW), "selected", False
+        ),
+    )
+    _ejecutar(
+        f"Seleccionar fila objetivo [{row}]",
+        lambda: setattr(table.getAbsoluteRow(row), "selected", True),
+    )
+    cell_id = f"{LSMW_STEPLIST_TABLE}/txtGT_STEPLIST-STEPTEXT[0,{row}]"
+    cell = _ejecutar(
+        f"Localizar celda del paso [{row}] ({cell_id})",
+        session.findById, cell_id,
+    )
+    _ejecutar(f"Foco en celda del paso [{row}]", cell.setFocus)
+    _ejecutar(
+        f"Cursor en celda del paso [{row}] (caretPosition=0)",
+        lambda: setattr(cell, "caretPosition", 0),
+    )
 
 
 def open_lsmw(session) -> None:
     """Abre la T-code LSMW y ejecuta el proyecto pre-cargado."""
     _log("Paso 1/10: Abriendo transacción LSMW y proyecto pre-cargado...")
-    session.findById("wnd[0]").maximize()
-    session.findById("wnd[0]/tbar[0]/okcd").text = "LSMW"
-    session.findById("wnd[0]").sendVKey(0)
+    wnd = _ejecutar(
+        "Localizar ventana principal wnd[0]",
+        session.findById, "wnd[0]",
+    )
+    _ejecutar("Maximizar ventana principal", wnd.maximize)
+    okcd = _ejecutar(
+        "Localizar casilla de comandos (wnd[0]/tbar[0]/okcd)",
+        session.findById, "wnd[0]/tbar[0]/okcd",
+    )
+    _ejecutar(
+        "Escribir T-code 'LSMW' en okcd",
+        lambda: setattr(okcd, "text", "LSMW"),
+    )
+    _ejecutar("Enviar Enter (sendVKey 0)", wnd.sendVKey, 0)
     # F8 — entra al step list del proyecto pre-cargado
-    session.findById("wnd[0]/tbar[1]/btn[8]").press()
+    boton_f8 = _ejecutar(
+        "Localizar botón Ejecutar (F8 = wnd[0]/tbar[1]/btn[8])",
+        session.findById, "wnd[0]/tbar[1]/btn[8]",
+    )
+    _ejecutar("Pulsar Ejecutar (F8) para abrir el step list", boton_f8.press)
 
 
 def configurar_ruta_archivo(session, carpeta: str, nombre_archivo: str) -> None:
@@ -296,38 +342,101 @@ def configurar_ruta_archivo(session, carpeta: str, nombre_archivo: str) -> None:
     _log(f"Paso 2/10: Configurando ruta del archivo en LSMW → {carpeta}\\{nombre_archivo}")
     # Foco en la celda del paso "Specify Files" (row 6) y F2 para abrirlo
     cell_id = f"{LSMW_STEPLIST_TABLE}/txtGT_STEPLIST-STEPTEXT[0,{SPECIFY_FILES_ROW}]"
-    cell = session.findById(cell_id)
-    cell.setFocus()
-    cell.caretPosition = 5
-    session.findById("wnd[0]").sendVKey(2)
+    cell = _ejecutar(
+        f"Localizar celda del paso 'Specify Files' [{SPECIFY_FILES_ROW}]",
+        session.findById, cell_id,
+    )
+    _ejecutar("Foco en celda 'Specify Files'", cell.setFocus)
+    _ejecutar(
+        "Cursor en celda 'Specify Files' (caretPosition=5)",
+        lambda: setattr(cell, "caretPosition", 5),
+    )
+    wnd = _ejecutar(
+        "Localizar wnd[0] para enviar F2",
+        session.findById, "wnd[0]",
+    )
+    _ejecutar("Pulsar F2 (sendVKey 2) para abrir el paso", wnd.sendVKey, 2)
 
     # Botón "Cambiar" (modo edición)
-    session.findById("wnd[0]/tbar[1]/btn[25]").press()
+    btn_cambiar = _ejecutar(
+        "Localizar botón 'Cambiar' (wnd[0]/tbar[1]/btn[25])",
+        session.findById, "wnd[0]/tbar[1]/btn[25]",
+    )
+    _ejecutar("Pulsar 'Cambiar' (modo edición)", btn_cambiar.press)
 
     # Seleccionar la definición de archivo a editar
-    file_def = session.findById("wnd[0]/usr/lbl[43,6]")
-    file_def.setFocus()
-    file_def.caretPosition = 3
+    file_def = _ejecutar(
+        "Localizar definición de archivo (wnd[0]/usr/lbl[43,6])",
+        session.findById, "wnd[0]/usr/lbl[43,6]",
+    )
+    _ejecutar("Foco en definición de archivo", file_def.setFocus)
+    _ejecutar(
+        "Cursor en definición (caretPosition=3)",
+        lambda: setattr(file_def, "caretPosition", 3),
+    )
 
     # Botón "Asignar archivo" — abre diálogo modal
-    session.findById("wnd[0]/tbar[1]/btn[27]").press()
+    btn_asignar = _ejecutar(
+        "Localizar botón 'Asignar archivo' (wnd[0]/tbar[1]/btn[27])",
+        session.findById, "wnd[0]/tbar[1]/btn[27]",
+    )
+    _ejecutar("Pulsar 'Asignar archivo'", btn_asignar.press)
 
     # F4 en el modal para abrir el explorador de archivos del frontend
-    session.findById("wnd[1]").sendVKey(4)
+    wnd1 = _ejecutar(
+        "Localizar diálogo modal (wnd[1])",
+        session.findById, "wnd[1]",
+    )
+    _ejecutar(
+        "Pulsar F4 (sendVKey 4) para abrir explorador",
+        wnd1.sendVKey, 4,
+    )
 
     # Ingresar ruta y nombre en el explorador (wnd[2])
-    session.findById("wnd[2]/usr/ctxtDY_PATH").text = carpeta
-    filename_field = session.findById("wnd[2]/usr/ctxtDY_FILENAME")
-    filename_field.text = nombre_archivo
-    filename_field.caretPosition = len(nombre_archivo)
+    path_field = _ejecutar(
+        "Localizar campo ruta del explorador (wnd[2]/usr/ctxtDY_PATH)",
+        session.findById, "wnd[2]/usr/ctxtDY_PATH",
+    )
+    _ejecutar(
+        f"Asignar ruta = '{carpeta}'",
+        lambda: setattr(path_field, "text", carpeta),
+    )
+    filename_field = _ejecutar(
+        "Localizar campo nombre del explorador (wnd[2]/usr/ctxtDY_FILENAME)",
+        session.findById, "wnd[2]/usr/ctxtDY_FILENAME",
+    )
+    _ejecutar(
+        f"Asignar nombre = '{nombre_archivo}'",
+        lambda: setattr(filename_field, "text", nombre_archivo),
+    )
+    _ejecutar(
+        "Cursor al final del nombre",
+        lambda: setattr(filename_field, "caretPosition", len(nombre_archivo)),
+    )
 
     # Confirmar diálogos: OK explorador → OK modal
-    session.findById("wnd[2]/tbar[0]/btn[0]").press()
-    session.findById("wnd[1]/tbar[0]/btn[0]").press()
+    ok_explorador = _ejecutar(
+        "Localizar OK del explorador (wnd[2]/tbar[0]/btn[0])",
+        session.findById, "wnd[2]/tbar[0]/btn[0]",
+    )
+    _ejecutar("Pulsar OK del explorador", ok_explorador.press)
+    ok_modal = _ejecutar(
+        "Localizar OK del modal (wnd[1]/tbar[0]/btn[0])",
+        session.findById, "wnd[1]/tbar[0]/btn[0]",
+    )
+    _ejecutar("Pulsar OK del modal", ok_modal.press)
 
     # Volver al step list y confirmar guardar cambios
-    session.findById("wnd[0]/tbar[0]/btn[3]").press()
-    session.findById("wnd[1]/usr/btnSPOP-OPTION1").press()
+    btn_back = _ejecutar(
+        "Localizar botón Back (wnd[0]/tbar[0]/btn[3])",
+        session.findById, "wnd[0]/tbar[0]/btn[3]",
+    )
+    _ejecutar("Pulsar Back para volver al step list", btn_back.press)
+    btn_guardar = _ejecutar(
+        "Localizar 'Sí' del popup de guardar (wnd[1]/usr/btnSPOP-OPTION1)",
+        session.findById, "wnd[1]/usr/btnSPOP-OPTION1",
+    )
+    _ejecutar("Pulsar 'Sí' para guardar cambios", btn_guardar.press)
 
 
 def step_assign_files(session) -> None:
