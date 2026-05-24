@@ -7,7 +7,7 @@ venv/
 .env
 
 # Output generado por la app
-salida/
+
 
 # macOS
 .DS_Store
