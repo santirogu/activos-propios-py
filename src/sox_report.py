@@ -70,7 +70,7 @@ CREADOS_HEADERS = (
     "Fecha", "Hora", "Usuario", "Activo Fijo", "Subnúmero",
     "Identificación de objeto editada", "Valor de objeto ampliado",
     "Denominación de atributo", "Valor editado nuevo",
-    "Valor editado antiguo", "Extrae", "PPE o Intg",
+    "Valor editado antiguo", "Extrae", "PPE o Intangible",
 )
 
 # Bloque de observaciones (filas 1-9) que va encima de los datos en la hoja
@@ -864,24 +864,30 @@ def generar_hoja_creados(archivo_poblacion: Path) -> dict[str, int]:
         ws_dst.cell(fila_excel, 9, datos[8])
         ws_dst.cell(fila_excel, 10, datos[9])
 
-        # K: fórmula Excel =MID(D{n},1,2). MID siempre devuelve texto, así
-        # que K queda como string al ser evaluada (preserva ceros a la
-        # izquierda). El number_format="@" refuerza el tipo declarativamente.
-        # Usar fórmula (en lugar de valor estático) permite que el usuario
-        # modifique D y vea K/L recalcularse en Excel.
-        cell_k = ws_dst.cell(fila_excel, 11, f"=MID(D{fila_excel},1,2)")
+        # K: fórmula Excel =EXTRAE(D{n};1;2) (MID en inglés). EXTRAE siempre
+        # devuelve texto, así que K queda como string al ser evaluada
+        # (preserva ceros a la izquierda). El number_format="@" refuerza el
+        # tipo declarativamente. Usar fórmula (en lugar de valor estático)
+        # permite que el usuario modifique D y vea K/L recalcularse en Excel.
+        #
+        # IMPORTANTE: las fórmulas están en español (EXTRAE, SI.CONJUNTO,
+        # VERDADERO) con `;` como separador porque el Excel del cliente está
+        # en español. Escribirlas en inglés (MID, IFS, TRUE, `,`) hacía que
+        # Excel-ES no las interpretara correctamente.
+        cell_k = ws_dst.cell(fila_excel, 11, f"=EXTRAE(D{fila_excel};1;2)")
         cell_k.number_format = "@"
 
-        # L: fórmula =IFS(...) — clasifica según los primeros 2 dígitos:
-        # K="19" → "Intangible", K="20"/"14" → "Activo Construcción",
-        # cualquier otro → "PPE". La fórmula se evalúa en Excel al abrir.
+        # L: fórmula =SI.CONJUNTO(...) — clasifica según los primeros 2
+        # dígitos: K="19" → "Intangible", K="20"/"14" → "Activo
+        # Construcción", cualquier otro → "PPE". La fórmula se evalúa en
+        # Excel al abrir el archivo.
         ws_dst.cell(
             fila_excel, 12,
-            f'=IFS('
-            f'K{fila_excel}="19","Intangible",'
-            f'K{fila_excel}="20","Activo Construcción",'
-            f'K{fila_excel}="14","Activo Construcción",'
-            f'TRUE,"PPE")'
+            f'=SI.CONJUNTO('
+            f'K{fila_excel}="19";"Intangible";'
+            f'K{fila_excel}="20";"Activo Construcción";'
+            f'K{fila_excel}="14";"Activo Construcción";'
+            f'VERDADERO;"PPE")'
         )
 
     wb.save(archivo_poblacion)
