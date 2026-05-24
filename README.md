@@ -105,7 +105,7 @@ Si cualquier validación falla, se muestra un diálogo de error y no se ejecuta 
 - **Intermedio** `SOX_<SOCIEDAD>_<YYYYMMDD_HHMMSS>.xlsx` — lo que SAP exportó vía `&XXL` del ALV grid.
 - **Final / deliverable** `Población_<SOCIEDAD>_<FECHA_HASTA>.xlsx` — generado en Python con **dos hojas**:
   - `Original_SAP`: copia 1:1 del intermedio, celda por celda, preservando el `number_format` de cada una (Fecha `mm-dd-yy` y Hora `[$-F400]h:mm:ss\ AM/PM` se ven como en SAP, no con el ISO 24h default de openpyxl).
-  - `Creados`: subconjunto de `Original_SAP` filtrado por `G == "*** creado ***"`, con la columna D (`AF <code>-<sub> <denom>`) descompuesta en `Activo Fijo` (int), `Subnúmero` (int) y `Identificación de objeto editada` (denominación, texto). Añade dos columnas calculadas: K = primeros 2 dígitos del código como **texto** (preserva ceros), L = clasificación PPE / Intangible / Activo Construcción según K. Bloque de observaciones explicativas en filas 1-9, headers en bold en fila 10, datos desde fila 11.
+  - `Creados`: subconjunto de `Original_SAP` filtrado por `G == "*** creado ***"`, con la columna D (`AF <code>-<sub> <denom>`) descompuesta en `Activo Fijo` (int), `Subnúmero` (int) y `Identificación de objeto editada` (denominación, texto). Añade dos columnas como **fórmulas Excel** (no valores pre-calculados): K = `=MID(D{n},1,2)` (primeros 2 dígitos del código, queda como texto), L = `=IFS(K{n}="19","Intangible", K{n}="20","Activo Construcción", K{n}="14","Activo Construcción", TRUE,"PPE")`. Las fórmulas se evalúan al abrir el archivo — si el usuario modifica D, K y L recalcularán. Bloque de observaciones explicativas en filas 1-9, headers en bold en fila 10, datos desde fila 11.
 
   Es el nombre que el handler GUI muestra en el diálogo de éxito. Ejemplo: `Población_ISA_31.03.2026.xlsx`.
 
@@ -184,7 +184,7 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **222 pruebas** distribuidas en tres archivos:
+La suite contiene **216 pruebas** distribuidas en tres archivos:
 
 #### `tests/test_main.py` (75 pruebas)
 
@@ -238,7 +238,7 @@ La suite contiene **222 pruebas** distribuidas en tres archivos:
 | `test_worker_handles_lsmw_flow_error` | Excepción del flujo → error, NO muestra info de éxito |
 | `test_worker_resets_status_on_error` | `status_var` se vacía tras error |
 
-#### `tests/test_sox_report.py` (101 pruebas)
+#### `tests/test_sox_report.py` (95 pruebas)
 
 | Clase | Tests | Cobertura |
 |---|---|---|
@@ -253,9 +253,8 @@ La suite contiene **222 pruebas** distribuidas en tres archivos:
 | `StepErrorContextTest` | varios | Re-raise con contexto cuando algún paso SAP falla |
 | `GenerarReporteSoxTest` | 7 | Orden de los 5 pasos (incluye `poblacion`), normaliza sociedad, valida, devuelve nombre `Población_*`, `EXPORT_METHOD=None` salta paso post-SAP |
 | **`GenerarXlsxPoblacionTest`** | 11 | Crea archivo con nombre estándar (`Población_{SOC}_{FECHA}.xlsx`), hoja `Original_SAP`, copia contenido, preserva datetime/numeric + `number_format` por celda (Fecha `mm-dd-yy`, Hora AM/PM), crea carpeta destino, normaliza fecha con whitespace, rechaza source missing / non-xlsx / fecha inválida |
-| **`ClasificarPpeIntgTest`** | 4 | Mapeo de prefijo a categoría: `19→Intangible`, `20/14→Activo Construcción`, resto → PPE |
 | **`PatronAfRegexTest`** | 6 | Regex `^AF\s+(\d+)-(\d+)\s+(.+)$` parsea código + subnúmero + denominación; acepta múltiples espacios después de "AF", caracteres especiales y guiones en la denominación; rechaza prefijos distintos a "AF" y código no-numérico |
-| **`GenerarHojaCreadosTest`** | 16 | Filter `*** creado ***` (exact match, case-sensitive), parseo de col D, headers en bold (fila 10), datos desde fila 11, columna K como texto (`number_format="@"`), columna L con clasificación correcta para `19/20/14/default`, preserva `number_format` de Fecha/Hora, omite y cuenta filas que no matchean regex o tienen col D no-string, reemplaza hoja Creados existente (idempotente), valida que el workbook tenga `Original_SAP`, archivo source missing |
+| **`GenerarHojaCreadosTest`** | 14 | Filter `*** creado ***` (exact match, case-sensitive), parseo de col D, headers en bold (fila 10), datos desde fila 11, columnas K y L como **fórmulas Excel** (`=MID(D{n},1,2)` y `=IFS(...)` con referencias por fila), preserva `number_format` de Fecha/Hora, omite y cuenta filas que no matchean regex o tienen col D no-string, reemplaza hoja Creados existente (idempotente), valida que el workbook tenga `Original_SAP`, archivo source missing |
 | `MainEntryPointTest` | 5 | Exit codes según argumentos y errores de validación/SAP |
 
 #### `tests/test_sap_upload.py` (46 pruebas)
@@ -293,7 +292,7 @@ La suite contiene **222 pruebas** distribuidas en tres archivos:
 ├── tests/
 │   ├── test_main.py                 # 75 pruebas: extracción + botones + vista SOX (frame embebido)
 │   ├── test_sap_upload.py           # 46 pruebas: flujo LSMW completo
-│   └── test_sox_report.py           # 101 pruebas: validaciones + flujo SOX + paso Población + paso Creados
+│   └── test_sox_report.py           # 95 pruebas: validaciones + flujo SOX + paso Población + paso Creados
 ├── resources/
 │   ├── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla
 │   ├── script_sap_base.txt          # Grabación VBS del flujo LSMW (UTF-16)
@@ -345,7 +344,7 @@ Esta separación granular permite testear cada paso de forma aislada con un `Moc
 | 3/5 | `ingresar_parametros` | F8 (`btn[8].press`) — ejecuta reporte |
 | 4/5 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) | `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `DY_PATH`/`DY_FILENAME` + `btn[11]` (Generar/Reemplazar; `btn[0]` no existe en este diálogo). Produce `SOX_<SOC>_<TIMESTAMP>.xlsx`. Si `EXPORT_METHOD="pc_list"` usa `%PC` + `btn[0]` (sólo aplica a listas clásicas, NO a AR15). |
 | 5/6 | `generar_xlsx_poblacion` (pure Python, post-SAP) | `openpyxl.load_workbook` del intermedio → itera celda por celda copiando `value` + `number_format` a una hoja `Original_SAP` (preservando el formato corto de Fecha `mm-dd-yy` y de Hora `[$-F400]h:mm:ss\ AM/PM` que usa SAP) → `wb.save("Población_<SOC>_<FECHA_HASTA>.xlsx")`. Se omite si `EXPORT_METHOD=None`. |
-| 6/6 | `generar_hoja_creados` (pure Python, post-procesamiento) | Abre el `Población_*.xlsx`, lee `Original_SAP`, filtra filas con `G == "*** creado ***"`, parsea col D con `re.compile(r"^AF\s+(\d+)-(\d+)\s+(.+)$")` → escribe una **segunda hoja `Creados`** en el mismo workbook con: bloque de observaciones (filas 1-9), headers en bold (fila 10), datos desde fila 11. Columna K = primeros 2 dígitos del código como texto (`number_format="@"`, preserva ceros). Columna L = clasificación: `"19"→Intangible`, `"20"/"14"→Activo Construcción`, resto → `PPE`. Filas que pasan filtro pero col D no matchea el regex se loguean y omiten. Es el deliverable final que devuelve `generar_reporte_sox`. |
+| 6/6 | `generar_hoja_creados` (pure Python, post-procesamiento) | Abre el `Población_*.xlsx`, lee `Original_SAP`, filtra filas con `G == "*** creado ***"`, parsea col D con `re.compile(r"^AF\s+(\d+)-(\d+)\s+(.+)$")` → escribe una **segunda hoja `Creados`** en el mismo workbook con: bloque de observaciones (filas 1-9), headers en bold (fila 10), datos desde fila 11. **Columnas K y L como fórmulas Excel**: K = `=MID(D{n},1,2)`, L = `=IFS(K{n}="19","Intangible", K{n}="20","Activo Construcción", K{n}="14","Activo Construcción", TRUE,"PPE")`. Excel evalúa las fórmulas al abrir el archivo (no se calculan en Python). Filas que pasan filtro pero col D no matchea el regex se loguean y omiten. Es el deliverable final que devuelve `generar_reporte_sox`. |
 | Assign Files | 7 | `step_assign_files` | btn[32] + VK3 |
 | Read Data | 8 | `step_read_data` | btn[32] + btn[8] + 2×VK3 |
 | Display Read Data | (auto-avanza) | `step_display_read_data` | btn[32] + popup + VK3 |

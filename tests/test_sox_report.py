@@ -32,7 +32,6 @@ from sox_report import (  # noqa: E402
     STANDARD_SHEET_NAME,
     TREE_SHELL,
     VALID_SOCIEDADES,
-    _clasificar_ppe_intg,
     abrir_transaccion_sox,
     exportar_a_excel,
     generar_hoja_creados,
@@ -919,27 +918,8 @@ class GenerarXlsxPoblacionTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _clasificar_ppe_intg + PATRON_AF (helpers de generar_hoja_creados)
+# PATRON_AF (helper de generar_hoja_creados)
 # ---------------------------------------------------------------------------
-
-
-class ClasificarPpeIntgTest(unittest.TestCase):
-    """Verifica el mapeo: '19'→Intangible, '20'/'14'→Activo Construcción,
-    cualquier otro → PPE. Equivalente a la fórmula Excel IFS de la columna L."""
-
-    def test_19_is_intangible(self):
-        self.assertEqual(_clasificar_ppe_intg("19"), "Intangible")
-
-    def test_20_is_activo_construccion(self):
-        self.assertEqual(_clasificar_ppe_intg("20"), "Activo Construcción")
-
-    def test_14_is_activo_construccion(self):
-        self.assertEqual(_clasificar_ppe_intg("14"), "Activo Construcción")
-
-    def test_other_prefixes_default_to_ppe(self):
-        for prefijo in ["80", "12", "33", "01", "99", "", "abc"]:
-            with self.subTest(prefijo=prefijo):
-                self.assertEqual(_clasificar_ppe_intg(prefijo), "PPE")
 
 
 class PatronAfRegexTest(unittest.TestCase):
@@ -1108,53 +1088,32 @@ class GenerarHojaCreadosTest(unittest.TestCase):
         self.assertEqual(ws.cell(11, 5).value, 0)        # subnúmero int
         self.assertEqual(ws.cell(11, 6).value, "Buje 500 kV-RV")
 
-    def test_column_k_is_text_format_with_2_chars(self):
-        """K debe ser TEXTO (number_format '@') de 2 caracteres, no número."""
+    def test_column_k_is_mid_formula_referencing_d_same_row(self):
+        """K debe ser una fórmula =MID(D{n},1,2) — no un valor estático.
+        Esto permite que el usuario modifique D en Excel y vea K recalcular."""
         rows = [
             [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
              "USR", "AF 1900000-0 Test", "", "", CREADOS_FILTRO_VALOR, ""],
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR", "AF 2000000-0 Test", "", "", CREADOS_FILTRO_VALOR, ""],
         ]
         poblacion = self._crear_poblacion(rows)
         generar_hoja_creados(poblacion)
 
         wb = load_workbook(poblacion)
         ws = wb[CREADOS_SHEET_NAME]
-        k_cell = ws.cell(11, 11)
-        self.assertEqual(k_cell.value, "19")
-        self.assertIsInstance(k_cell.value, str)
-        self.assertEqual(k_cell.number_format, "@")
+        # Cada fila tiene su propia fórmula referenciando D de la misma fila.
+        self.assertEqual(ws.cell(11, 11).value, "=MID(D11,1,2)")
+        self.assertEqual(ws.cell(12, 11).value, "=MID(D12,1,2)")
+        # number_format = "@" refuerza el tipo texto (MID ya lo garantiza).
+        self.assertEqual(ws.cell(11, 11).number_format, "@")
 
-    def test_column_l_classifies_19_as_intangible(self):
+    def test_column_l_is_ifs_formula_referencing_k_same_row(self):
+        """L debe ser una fórmula =IFS(...) con los 4 casos del cliente."""
         rows = [
             [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
              "USR", "AF 1900000-0 Software", "", "",
              CREADOS_FILTRO_VALOR, ""],
-        ]
-        poblacion = self._crear_poblacion(rows)
-        generar_hoja_creados(poblacion)
-
-        wb = load_workbook(poblacion)
-        ws = wb[CREADOS_SHEET_NAME]
-        self.assertEqual(ws.cell(11, 11).value, "19")
-        self.assertEqual(ws.cell(11, 12).value, "Intangible")
-
-    def test_column_l_classifies_20_and_14_as_activo_construccion(self):
-        rows = [
-            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
-             "USR", "AF 2000421-0 Obra A", "", "", CREADOS_FILTRO_VALOR, ""],
-            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
-             "USR", "AF 1400999-1 Obra B", "", "", CREADOS_FILTRO_VALOR, ""],
-        ]
-        poblacion = self._crear_poblacion(rows)
-        generar_hoja_creados(poblacion)
-
-        wb = load_workbook(poblacion)
-        ws = wb[CREADOS_SHEET_NAME]
-        self.assertEqual(ws.cell(11, 12).value, "Activo Construcción")
-        self.assertEqual(ws.cell(12, 12).value, "Activo Construcción")
-
-    def test_column_l_default_is_ppe(self):
-        rows = [
             [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
              "USR", "AF 8047759-0 Equipo", "", "",
              CREADOS_FILTRO_VALOR, ""],
@@ -1164,7 +1123,16 @@ class GenerarHojaCreadosTest(unittest.TestCase):
 
         wb = load_workbook(poblacion)
         ws = wb[CREADOS_SHEET_NAME]
-        self.assertEqual(ws.cell(11, 12).value, "PPE")
+        esperado_11 = (
+            '=IFS('
+            'K11="19","Intangible",'
+            'K11="20","Activo Construcción",'
+            'K11="14","Activo Construcción",'
+            'TRUE,"PPE")'
+        )
+        esperado_12 = esperado_11.replace("K11", "K12")
+        self.assertEqual(ws.cell(11, 12).value, esperado_11)
+        self.assertEqual(ws.cell(12, 12).value, esperado_12)
 
     def test_preserves_fecha_hora_number_format(self):
         rows = [

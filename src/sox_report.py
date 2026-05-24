@@ -99,14 +99,6 @@ CREADOS_OBSERVACIONES = (
     (8, 11, "-------------[a]-------------"),
 )
 
-# Mapping de prefijos (primeros 2 dígitos del código) a categoría.
-# Cualquier prefijo no listado cae en "PPE".
-CREADOS_CLASIFICACION = {
-    "19": "Intangible",
-    "20": "Activo Construcción",
-    "14": "Activo Construcción",
-}
-
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
 # ---------------------------------------------------------------------------
@@ -737,17 +729,6 @@ def generar_xlsx_poblacion(
     return ruta_destino
 
 
-def _clasificar_ppe_intg(prefijo_codigo: str) -> str:
-    """Devuelve la categoría según los primeros 2 dígitos del código del
-    activo: '19'→Intangible, '20'/'14'→Activo Construcción, resto→PPE.
-
-    Equivalente Excel:
-        =IFS(K{n}="19","Intangible", K{n}="20","Activo Construcción",
-             K{n}="14","Activo Construcción", TRUE,"PPE")
-    """
-    return CREADOS_CLASIFICACION.get(prefijo_codigo, "PPE")
-
-
 def generar_hoja_creados(archivo_poblacion: Path) -> dict[str, int]:
     """Añade (o reemplaza) la hoja `Creados` al workbook Población.
 
@@ -883,16 +864,25 @@ def generar_hoja_creados(archivo_poblacion: Path) -> dict[str, int]:
         ws_dst.cell(fila_excel, 9, datos[8])
         ws_dst.cell(fila_excel, 10, datos[9])
 
-        # K: primeros 2 caracteres del código, como texto (preserva ceros
-        # a la izquierda y permite que la fórmula de clasificación los
-        # compare como strings).
-        codigo_str = str(datos[3])
-        k_value = codigo_str[:2]
-        cell_k = ws_dst.cell(fila_excel, 11, k_value)
+        # K: fórmula Excel =MID(D{n},1,2). MID siempre devuelve texto, así
+        # que K queda como string al ser evaluada (preserva ceros a la
+        # izquierda). El number_format="@" refuerza el tipo declarativamente.
+        # Usar fórmula (en lugar de valor estático) permite que el usuario
+        # modifique D y vea K/L recalcularse en Excel.
+        cell_k = ws_dst.cell(fila_excel, 11, f"=MID(D{fila_excel},1,2)")
         cell_k.number_format = "@"
 
-        # L: clasificación según K.
-        ws_dst.cell(fila_excel, 12, _clasificar_ppe_intg(k_value))
+        # L: fórmula =IFS(...) — clasifica según los primeros 2 dígitos:
+        # K="19" → "Intangible", K="20"/"14" → "Activo Construcción",
+        # cualquier otro → "PPE". La fórmula se evalúa en Excel al abrir.
+        ws_dst.cell(
+            fila_excel, 12,
+            f'=IFS('
+            f'K{fila_excel}="19","Intangible",'
+            f'K{fila_excel}="20","Activo Construcción",'
+            f'K{fila_excel}="14","Activo Construcción",'
+            f'TRUE,"PPE")'
+        )
 
     wb.save(archivo_poblacion)
 
