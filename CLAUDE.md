@@ -1,0 +1,234 @@
+# memory.md — Contexto del proyecto `activos-propios-py`
+
+> Snapshot del proyecto al 2026-05-24. Generado leyendo `README.md`, `src/`, `tests/`, `resources/` y `requirements.txt`.
+
+## 1. Propósito
+
+Aplicación de escritorio en Python que **automatiza dos pasos del proceso de creación y capitalización de activos fijos en SAP**:
+
+1. **Extracción** de la hoja `LSMW` del formato dinámico Excel a un `.txt` separado por tabulación.
+2. **Carga** de ese `.txt` a SAP vía la transacción **LSMW**, ejecutando el flujo completo (Specify Files → Read Data → Convert Data → Create BI Session → Run BI) mediante **SAP GUI Scripting** (COM, pywin32).
+
+Además, ofrece una tercera función:
+
+3. **Generación del Reporte SOX** desde la transacción `AR15` de SAP, con exportación a Excel a `salida/`.
+
+La autenticación SAP es manual; el script no logea al usuario, solo se conecta a una sesión ya abierta.
+
+## 2. Stack y dependencias
+
+- **Python 3.9+** con soporte Tkinter (en macOS, el Python de Homebrew 3.12 NO trae Tk → usar `python.org` o el del sistema).
+- **openpyxl** ≥ 3.1 — lee/escribe Excel (multiplataforma).
+- **tkcalendar** ≥ 1.6 — widget `DateEntry` para los campos de fecha SOX.
+- **pywin32** ≥ 306 — solo Windows (`platform_system == "Windows"`); requerido para "Subir a SAP" y "Generar Reporte SOX". Marker en `requirements.txt` lo evita en macOS/Linux.
+- Pruebas: `unittest` (stdlib, sin dependencias extra).
+
+## 3. Estructura del repo
+
+```
+.
+├── src/
+│   ├── main.py          # GUI Tkinter: 3 botones + test de conexión
+│   ├── sap_upload.py    # Flujo LSMW completo (10 pasos) vía SAP GUI Scripting
+│   └── sox_report.py    # Flujo Reporte SOX (4 pasos) vía SAP GUI Scripting
+├── tests/
+│   ├── test_main.py         # 63 pruebas: extracción + handlers de botones + diálogo SOX
+│   ├── test_sap_upload.py   # 36 pruebas: cada paso del flujo LSMW aislado
+│   └── test_sox_report.py   # 42 pruebas: validaciones + flujo SOX
+├── resources/
+│   ├── Formato_Dinamico_.xlsx        # Excel maestro con hojas "Formato" y "LSMW "
+│   ├── Población_ISA_31.03.2026.xlsx # Insumo del cliente
+│   ├── script_sap_base.txt           # Grabación VBS del flujo LSMW (UTF-16)
+│   ├── Script1.vbs / Script2.vbs     # Grabaciones VBS del flujo LSMW (paso Specify Files)
+│   ├── Scriptsox.vbs                 # Grabación VBS original del SOX (árbol F00xxx, frágil)
+│   └── Script2sox.vbs                # Grabación VBS actual del SOX (T-code AR15 + calendario F4)
+├── docs/
+│   └── flujo-proceso.png             # Diagrama del proceso end-to-end
+├── salida/                           # Generada en runtime (ignorada por git)
+├── requirements.txt
+├── README.md                         # Documentación exhaustiva (≈370 líneas)
+└── .gitignore                        # Ignora salida/, .venv/, __pycache__, .vscode/, .idea/, .DS_Store
+```
+
+Nota: la carpeta `salida/` está en `.gitignore` y se crea en runtime cuando se extraen .txt o se genera el reporte SOX.
+
+## 4. GUI — `src/main.py`
+
+Ventana principal (480x380, no redimensionable) con cuatro controles:
+
+| Botón | Función | Plataforma |
+|---|---|---|
+| **Extraer información en txt** | `extraer_lsmw_a_txt` | Cualquier OS |
+| **Subir a SAP** | `subir_a_sap` (arranca *disabled*; polling cada 1s habilita/deshabilita según `LSMW_*.txt` presentes en `salida/`) | Solo Windows |
+| **Control SOX** | `control_sox` (abre `Toplevel` modal con Sociedad + Desde + Hasta) | Solo Windows |
+| **Test conexión SAP** | `_test_conexion_sap_handler` (diagnóstico, estilo secundario) | Solo Windows |
+
+### Detalles importantes
+
+- `SHEET_NAME = "LSMW "` (con **espacio final** — así está nombrada la pestaña en el Excel).
+- `_POLL_INTERVAL_MS = 1000` — polling para refrescar estado del botón "Subir a SAP".
+- Flag módulo-level `_upload_en_curso` evita que el polling pise el estado del botón mientras corre el worker.
+- Workers SAP corren en `threading.Thread(daemon=True)` para no congelar la GUI; comunican status vía `root.after(0, ...)` (thread-safe).
+- `_sap_com_apartment()` — context manager que llama `pythoncom.CoInitialize()` / `CoUninitialize()` en cada worker. **Sin esto**, `GetObject('SAPGUI')` falla en threads no-main con error genérico aunque SAP esté abierto. No-op en macOS/Linux.
+- `_install_tk_exception_handler(root)` reemplaza `root.report_callback_exception` para que excepciones en callbacks Tkinter abran un `messagebox.showerror` con traceback completo en vez de imprimir silenciosamente a stderr.
+- `_show_unexpected_error(title, exc)` — red de seguridad para mostrar tipo + mensaje + traceback al usuario.
+- `_log(mensaje)` imprime con timestamp `[HH:MM:SS]` y `flush=True`.
+
+### Comportamiento del botón "Extraer"
+
+- Si existe(n) `LSMW_*.txt` previos → diálogo SÍ/NO `messagebox.askyesno`. SÍ borra todos los previos y genera uno nuevo; NO conserva.
+- Sin previos → genera directamente `LSMW_YYYYMMDD_HHMMSS.txt`.
+- Validaciones manejadas explícitamente: `FileNotFoundError` (Excel ausente), `ValueError` (hoja ausente), `Exception` (genérica del export), y red de seguridad que muestra traceback completo.
+
+### Diálogo Control SOX
+
+- **Sociedad**: `ttk.Combobox` en estado `readonly` (el usuario no puede escribir libre). Opciones: `TRAN, ISA, ITCH, CEYBA, CABA, RPAE, CTMP, REPD, ISAP`.
+- **Desde/Hasta**: `DateEntry` de tkcalendar con `date_pattern="dd.mm.yyyy"`. Validación per-keystroke (`validar_caracter_fecha`) acepta solo dígitos y puntos, máx 10 caracteres. Inicializa con la fecha actual.
+- Validaciones al pulsar **Generar Reporte SOX**:
+  1. Sociedad en lista permitida (normaliza con `.strip().upper()`).
+  2. Ambas fechas formato `dd.mm.aaaa` válido.
+  3. `Hasta >= Desde`.
+
+## 5. Flujo SAP LSMW — `src/sap_upload.py`
+
+Replica las grabaciones VBS de SAP. Granularidad fina: cada paso es una función dedicada para poder testearlo aislado con `MockSAPSession`.
+
+### Funciones de soporte
+- `get_latest_txt(salida_dir)` → `Path` del `LSMW_*.txt` más reciente por mtime. Lanza `FileNotFoundError`.
+- `get_sap_session()` → primera sesión activa vía `win32com.client.GetObject("SAPGUI")`. Lanza `RuntimeError` con mensajes accionables (pywin32 ausente, SAP cerrado, scripting deshabilitado, sin conexiones, sin sesiones).
+- `diagnosticar_conexion_sap()` → tupla `(ok, mensaje)`. Detecta y reporta el estado paso a paso (con `SystemName/Client/User` de cada sesión).
+- `_ejecutar(descripcion, fn, *args, **kwargs)` → wrapper que loguea y, si falla, re-lanza `RuntimeError` con descripción humana + repr de la excepción COM (que suele venir vacía).
+- `_confirmar_popup_opcional(session, descripcion)` → intenta `wnd[1].sendVKey(0)` (Enter en popup). Si no hay popup, loguea y sigue. Clave para resistir popups condicionales.
+- `_volver_al_step_list(session, max_intentos=3)` → garantiza retorno al step list buscando `LSMW_STEPLIST_TABLE`; si no, envía F3 (Back) iterativamente. Resuelve flakiness de SAP que a veces no auto-retorna tras confirmar popups.
+
+### Orquestador
+`run_lsmw_flow(session, carpeta, nombre_archivo)` ejecuta los 10 pasos secuencialmente.
+
+### Mapeo del flujo LSMW (10 pasos)
+
+| # | Función | Fila step list | Acciones SAP |
+|---|---|---|---|
+| 1 | `open_lsmw` | — | maximize + okcd="LSMW" + Enter + F8 |
+| 2 | `configurar_ruta_archivo(carpeta, nombre)` | 6 (Specify Files) | F2 + btn[25] (Cambiar) + lbl[43,6] + btn[27] (Asignar) + F4 picker + DY_PATH/DY_FILENAME + 2×OK + Back + SPOP-OPTION1 (popup *opcional*) |
+| 3 | `step_assign_files` | 7 | btn[32] + F3 |
+| 4 | `step_read_data` | 8 | btn[32] + F8 + 2×F3 |
+| 5 | `step_display_read_data` | (auto-avanza) | btn[32] + popup opcional + F3 |
+| 6 | `step_convert_data` | (auto-avanza) | btn[32] + F8 + 2×F3 |
+| 7 | `step_display_converted_data` | (auto-avanza) | btn[32] + popup opcional + F3 |
+| 8 | `step_create_batch_input` | (auto-avanza) | btn[32] + chkP_KEEP=True + F8 + popup + `_volver_al_step_list` |
+| 9 | `step_run_batch_input` | 13 (explícita) | `select_step_row` + btn[32] |
+| 10 | `process_bdc_session` | (tabla BDC) | row[0] + GROUPID focus + F8 + radD0300-ERROR + chkLOGALL + chkEXPERT + 2×OK |
+
+### Constantes clave
+- `LSMW_STEPLIST_TABLE = "wnd[0]/usr/tbl/SAPDMC/SAPLLSMW_OBJ_000TC_STEPLIST"`
+- `DEFAULT_SELECTED_ROW = 13` (SAP marca esta fila por default; `select_step_row` la deselecciona antes de elegir la objetivo).
+- `BDC_SESSION_TABLE = "wnd[0]/usr/tabsD1000_TABSTRIP/tabpALLE/ssubD1000_SUBSCREEN:SAPMSBDC_CC:1010/tblSAPMSBDC_CCTC_APQI"`
+- Filas: `SPECIFY_FILES_ROW=6`, `ASSIGN_FILES_ROW=7`, `READ_DATA_ROW=8`, `RUN_BI_ROW=13`.
+
+## 6. Flujo SOX — `src/sox_report.py`
+
+Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calendario F4, reemplazando la grabación inicial frágil con nodos F00xxx del árbol que sigue en `Scriptsox.vbs`).
+
+### Constantes clave
+- `T_CODE_SOX = "AR15"` — camino preferido (robusto). Si es `None`, hace fallback al árbol con `SOX_NODE_KEY = "F00039"` (frágil entre usuarios).
+- `TREE_SHELL = "wnd[0]/usr/cntlIMAGE_CONTAINER/shellcont/shell/shellcont[0]/shell"` — árbol del menú SAP.
+- `CALENDAR_SHELL = "wnd[1]/usr/cntlCONTAINER/shellcont/shell"` — calendario emergente F4.
+- `DATE_FORMAT_USER = "%d.%m.%Y"` (formulario) y `DATE_FORMAT_SAP_CALENDAR = "%Y%m%d"` (calendario SAP).
+- Campos: `CAMPO_SOCIEDAD = "wnd[0]/usr/ctxtP_BUKRS"`, `CAMPO_FECHA_DESDE = "wnd[0]/usr/ctxtS_DATUM-LOW"`, `CAMPO_FECHA_HASTA = "wnd[0]/usr/ctxtS_DATUM-HIGH"`.
+- `EXPORT_METHOD = "pc_list"` (default) — usa `%PC` (System > List > Save > File). Funciona con listas SAP clásicas como AR15. Alternativas: `"alv_grid"` (usa `&MB_EXPORT > &XXL` sobre `DOCS_GRID_SHELL` del recording original — no aplica a AR15) o `None` (no exporta, deja al usuario guardar manualmente).
+
+### Mapeo del flujo (4 pasos)
+
+| # | Función | Acciones SAP |
+|---|---|---|
+| 1 | `abrir_transaccion_sox` | maximize + okcd="AR15" + Enter. Fallback: `tree.doubleClickNode("F00039")` |
+| 2a | `ingresar_parametros` | `P_BUKRS.text = sociedad` |
+| 2b | `_seleccionar_fecha_calendario` (Desde) | foco campo + caretPosition 0 + F4 → calendar.focusDate / selectionInterval con `yyyymmdd` |
+| 2c | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH |
+| 3 | `ingresar_parametros` | F8 (ejecuta el reporte) |
+| 4 | `exportar_a_excel` → `_exportar_via_pc_list` o `_exportar_via_alv_grid` | `%PC` + manejo de variantes A/B/C del save-as (estructura del diálogo varía entre versiones SAP); `_rellenar_save_dialog` llena DY_PATH/DY_FILENAME + OK |
+
+### Helpers
+- `validar_sociedad` / `validar_fecha` / `validar_rango_fechas` / `validar_caracter_fecha` — validaciones puras, testeables sin SAP.
+- `_intentar_listar_nodos_arbol(tree)` — diagnóstico: enumera nodos del árbol SAP (`GetAllNodeKeys` + `GetNodeTextByKey`) cuando falla `doubleClickNode`. Mensaje de error sugiere descubrir la T-code real vía "Sistema → Estado".
+- Salida: `SOX_{SOCIEDAD}_{YYYYMMDD_HHMMSS}.xlsx` en `salida/`.
+
+### CLI
+```bash
+python src/sox_report.py ISA 01.05.2026 31.05.2026
+```
+Exit codes: 0 OK, 1 error (validación o SAP), 2 uso incorrecto.
+
+## 7. Datos: Hoja LSMW del Excel
+
+- La hoja `LSMW ` (con espacio) está cableada con fórmulas que referencian la hoja `Formato`.
+- `openpyxl` lee con `data_only=True` los valores **cacheados** por Excel en el último guardado → si el usuario edita el formulario, **debe abrir y guardar el Excel** antes de extraer para que las fórmulas se recalculen.
+- Celdas vacías referenciadas pueden aparecer como `0`.
+- 51 columnas exportadas — algunos campos: `ANLKL` (clase de activo), `BUKRS` (sociedad), `TXT50` (denominación), `KOSTL` (centro de costo), `WERKS` (centro), `EAUFN` (orden de inversión), `POSNR` (elemento PEP), `ORD41`–`ORD44` y `GDLGRP` (criterios de clasificación 1–5).
+
+## 8. Pruebas — 151 tests con `unittest`
+
+### Estrategia de mocking SAP
+- `MockSAPSession` registra cada llamada `findById(...).method()` en `session.actions` como tuplas `(sap_id, method, *args)`.
+- Expone elementos vía `session._elements[id]` para inspeccionar propiedades (`text`, `selected`, `caretPosition`).
+- Filas de tablas: `_MockRow` con setter que loguea cambios de `selected`.
+- Permite verificar la secuencia exacta de IDs y métodos sin un SAP real.
+
+### Estrategia de mocking GUI
+- `_SyncFakeThread` reemplaza `threading.Thread` para ejecutar el worker síncrono.
+- `root.after` se sobreescribe en `setUp` para invocar callbacks inmediatamente.
+- `patch.multiple("sap_upload", ...)` inyecta mocks; se guardan en `self.mocks`.
+
+### Distribución
+- `tests/test_main.py` (63): `ExportSheetToTsvTest` (9), `RealWorkbookSmokeTest` (1), `ExtraerLsmwATxtTest` (7), `ExtraerLsmwATxtErrorPathsTest` (4), `ShowUnexpectedErrorTest` (1), `InstallTkExceptionHandlerTest` (2), `HayTxtEnSalidaTest` (4), `RefrescarEstadoBotonSubirTest` (3), `PollEstadoBotonSubirTest` (1), `SubirASapFlagTest` (5), `ControlSoxDialogTest` (7), `GenerarReporteSoxHandlerTest` (8), `SubirASapTest` (11).
+- `tests/test_sox_report.py` (42): validaciones puras + cada paso del flujo SOX + entry point.
+- `tests/test_sap_upload.py` (36): cada paso del flujo LSMW + `MainEntryPointTest` (pasa carpeta y nombre del .txt al flujo).
+
+### Cómo ejecutar
+```bash
+python -m unittest discover tests -v
+python -m unittest tests.test_main -v
+python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_happy_path
+```
+
+## 9. Configuración SAP (una sola vez por máquina)
+
+1. **Cliente** — habilitar scripting: *Options → Accessibility & Scripting → Scripting → "Enable scripting"*. Recomendado desmarcar los dos *"Notify when..."*.
+2. **Servidor** — parámetro `sapgui/user_scripting = TRUE` (transacción RZ11). Pedir a Basis si no está activo.
+3. **Iniciar sesión SAP** antes de ejecutar (el script no autentica).
+4. **Pre-cargar el proyecto LSMW** una vez manualmente con Subproject + Object correctos (SAP recuerda la última selección).
+
+## 10. Diagnóstico — errores comunes en la carga SAP
+
+| Error | Causa probable | Solución |
+|---|---|---|
+| "No se pudo conectar a SAP GUI" | SAP no abierto o scripting deshabilitado | Abrir SAP, habilitar scripting |
+| "No hay sesiones activas" | Pantalla de login | Iniciar sesión SAP |
+| "Falta la dependencia pywin32" | Mac/Linux o deps no instaladas | `pip install pywin32` (solo Windows) |
+| Falla en `select_step_row` | Proyecto LSMW incorrecto | Abrir LSMW manualmente con proyecto correcto |
+| Falla en `configurar_ruta_archivo` | Definición de archivo en otra posición | Re-grabar `Script1.vbs` y ajustar IDs (`lbl[43,6]`, `btn[25]`, `btn[27]`) |
+| Falla en `step_read_data` | Archivo no existe en ruta inyectada o sin permisos | Verificar `salida/<archivo>` y permisos SAP |
+
+## 11. Git / estado actual
+
+- **Rama actual:** `master` (también es la rama principal del repo).
+- **Working tree:** limpio al 2026-05-24.
+- **Últimos commits:**
+  - `362d919` cambios
+  - `0ba2774` cambios
+  - `22800cc` fix(lsmw): garantizar retorno al step list entre pasos 8, 9 y 10
+  - `f26abd3` fix(lsmw): instrumentar pasos 3-10 y hacer popups opcionales
+  - `9cc7793` fix(lsmw): popup 'Sí guardar cambios' debe ser opcional
+- Convención de commits observada: `fix(lsmw): …` o "cambios" libre. Los fixes recientes giran alrededor de hacer el flujo LSMW resistente a popups condicionales y al hecho de que SAP no siempre auto-retorna al step list.
+
+## 12. Decisiones de diseño no obvias
+
+- **Granularidad fina de funciones por paso SAP** — no es sobre-ingeniería sino que permite testear cada paso aislado con `MockSAPSession`. Sin esto, habría que mockear el flujo completo de 10 pasos para verificar uno.
+- **Popups condicionales (`_confirmar_popup_opcional`)** — SAP a veces muestra popup, a veces no, según si hay cambios pendientes. La función intenta `wnd[1].sendVKey(0)` y captura el error sin romper.
+- **Retorno al step list (`_volver_al_step_list`)** — SAP no siempre auto-retorna tras confirmar un popup; los pasos 8/9/10 son donde esto se manifestaba como flakiness. La función envía F3 hasta encontrar la tabla, con tope de intentos.
+- **Selección explícita de la fila 13 en `step_run_batch_input`** — no se confía en el auto-advance del cursor de SAP, se selecciona explícitamente para hacer el flujo determinista entre corridas.
+- **Apartamento COM en threads** — `pythoncom.CoInitialize()` obligatorio en threads no-main de Windows; sin esto el COM falla aunque SAP esté abierto.
+- **Import lazy de `sap_upload` / `sox_report` dentro del worker** — permite que `main.py` arranque en macOS/Linux sin pywin32 (los botones SAP fallan al ejecutarse, pero la GUI carga).
+- **Hoja `"LSMW "` con espacio final** — así está nombrada en el Excel; si se quita el espacio se rompe el lookup.
+- **Polling cada 1s para habilitar "Subir a SAP"** — más simple que un watcher de filesystem y suficiente para la cadencia de uso esperada.
+- **EXPORT_METHOD configurable** — `"pc_list"` (default) para listas SAP clásicas vía `%PC`; `"alv_grid"` para grids ALV con `&MB_EXPORT > &XXL`; `None` para no exportar. AR15 usa lista clásica → `pc_list`.
