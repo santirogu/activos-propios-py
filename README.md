@@ -100,7 +100,10 @@ Validaciones al presionar **"Generar Reporte SOX"**:
 2. Ambas fechas deben tener formato `dd.mm.aaaa` válido.
 3. `Hasta` debe ser `>=` `Desde`.
 
-Si cualquier validación falla, se muestra un diálogo de error y no se ejecuta nada. Si todo es válido, se pide confirmación y el flujo SAP corre en un hilo background. Al terminar, el archivo `SOX_<SOCIEDAD>_<YYYYMMDD_HHMMSS>.xlsx` queda en `salida/`.
+Si cualquier validación falla, se muestra un diálogo de error y no se ejecuta nada. Si todo es válido, se pide confirmación y el flujo SAP corre en un hilo background. Al terminar quedan **dos archivos** en `salida/`:
+
+- **Intermedio** `SOX_<SOCIEDAD>_<YYYYMMDD_HHMMSS>.xlsx` — lo que SAP exportó vía `&XXL` del ALV grid.
+- **Final / deliverable** `Población_<SOCIEDAD>_<FECHA_HASTA>.xlsx` — generado en Python a partir del intermedio: contiene una única hoja llamada `Original_SAP` con todo el contenido del reporte SAP. Es el nombre que el handler GUI muestra en el diálogo de éxito. Ejemplo: `Población_ISA_31.03.2026.xlsx`.
 
 También se puede ejecutar desde CLI:
 
@@ -177,7 +180,7 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **151 pruebas** distribuidas en tres archivos:
+La suite contiene **170 pruebas** distribuidas en tres archivos:
 
 #### `tests/test_main.py` (63 pruebas)
 
@@ -231,7 +234,7 @@ La suite contiene **151 pruebas** distribuidas en tres archivos:
 | `test_worker_handles_lsmw_flow_error` | Excepción del flujo → error, NO muestra info de éxito |
 | `test_worker_resets_status_on_error` | `status_var` se vacía tras error |
 
-#### `tests/test_sox_report.py` (42 pruebas)
+#### `tests/test_sox_report.py` (71 pruebas)
 
 | Clase | Tests | Cobertura |
 |---|---|---|
@@ -239,11 +242,13 @@ La suite contiene **151 pruebas** distribuidas en tres archivos:
 | `ValidarFechaTest` | 7 | Acepta formato correcto, rechaza otros formatos, día/mes inválido, vacío, alfabético |
 | `ValidarRangoFechasTest` | 5 | `desde < hasta`, `desde == hasta`, rechaza `hasta < desde`, propaga errores de formato |
 | `ValidarCaracterFechaTest` | 4 | Per-keystroke: acepta dígitos/puntos, rechaza letras/símbolos/más-de-10-chars |
-| `GetSapSessionTest` | 2 | pywin32 ausente, devuelve sesión OK |
-| `AbrirTransaccionSoxTest` | 2 | maximize + doubleClickNode F00039, orden correcto |
-| `IngresarParametrosTest` | 3 | P_BUKRS/S_DATUM-LOW/HIGH + setFocus + F8 |
-| `ExportarAExcelTest` | 3 | &MB_EXPORT + &XXL, llena DY_PATH/DY_FILENAME, fallback close si no hay diálogo |
-| `GenerarReporteSoxTest` | 5 | Orden de pasos, normaliza sociedad, rechaza inválidos, nombre default con timestamp |
+| `GetSapSessionTest` | varios | pywin32 ausente, devuelve sesión OK |
+| `AbrirTransaccionSoxTest` | varios | T-code AR15 + fallback árbol |
+| `IngresarParametrosTest` + `SeleccionarFechaCalendarioTest` | varios | P_BUKRS + S_DATUM-LOW/HIGH vía calendario F4 + F8 |
+| `ExportarAExcelTest` | 9 | `pc_list` vs `alv_grid` vs `None`, fill DY_PATH/DY_FILENAME, `btn[0]` para PC, `btn[11]` para ALV, rechaza método inválido |
+| `StepErrorContextTest` | varios | Re-raise con contexto cuando algún paso SAP falla |
+| `GenerarReporteSoxTest` | 7 | Orden de los 5 pasos (incluye `poblacion`), normaliza sociedad, valida, devuelve nombre `Población_*`, `EXPORT_METHOD=None` salta paso post-SAP |
+| **`GenerarXlsxPoblacionTest`** | 10 | Crea archivo con nombre estándar (`Población_{SOC}_{FECHA}.xlsx`), hoja `Original_SAP`, copia contenido, preserva datetime/numeric, crea carpeta destino, normaliza fecha con whitespace, rechaza source missing / non-xlsx / fecha inválida |
 | `MainEntryPointTest` | 5 | Exit codes según argumentos y errores de validación/SAP |
 
 #### `tests/test_sap_upload.py` (36 pruebas)
@@ -281,7 +286,7 @@ La suite contiene **151 pruebas** distribuidas en tres archivos:
 ├── tests/
 │   ├── test_main.py                 # 60 pruebas: extracción + botones + diálogo SOX
 │   ├── test_sap_upload.py           # 36 pruebas: flujo LSMW completo
-│   └── test_sox_report.py           # 42 pruebas: validaciones + flujo SOX
+│   └── test_sox_report.py           # 71 pruebas: validaciones + flujo SOX + paso Población
 ├── resources/
 │   ├── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla
 │   ├── script_sap_base.txt          # Grabación VBS del flujo LSMW (UTF-16)
@@ -324,14 +329,15 @@ Esta separación granular permite testear cada paso de forma aislada con un `Moc
 
 #### Flujo Control SOX (basado en `resources/Script2sox.vbs`)
 
-| Paso | Función Python | Acciones SAP |
+| Paso | Función Python | Acciones SAP / Python |
 |---|---|---|
-| 1/4 | `abrir_transaccion_sox` | `okcd = "AR15"` + sendVKey 0 (modo T-code, robusto). Fallback: tree.doubleClickNode |
-| 2a/4 | `ingresar_parametros` | `P_BUKRS.text = sociedad` |
-| 2b/4 | `_seleccionar_fecha_calendario` (Desde) | foco S_DATUM-LOW + caretPosition 0 + sendVKey 4 (F4) + calendar.focusDate/selectionInterval con `yyyymmdd` |
-| 2c/4 | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH con la fecha hasta |
-| 3/4 | `ingresar_parametros` | F8 (`btn[8].press`) — ejecuta reporte |
-| 4/4 | `exportar_a_excel` | `&MB_EXPORT` + `&XXL` + intento DY_PATH/DY_FILENAME. **Pendiente:** el grid de AR15 difiere del shell grabado originalmente; re-grabar este paso si falla en producción. |
+| 1/5 | `abrir_transaccion_sox` | `okcd = "AR15"` + sendVKey 0 (modo T-code, robusto). Fallback: tree.doubleClickNode |
+| 2a/5 | `ingresar_parametros` | `P_BUKRS.text = sociedad` |
+| 2b/5 | `_seleccionar_fecha_calendario` (Desde) | foco S_DATUM-LOW + caretPosition 0 + sendVKey 4 (F4) + calendar.focusDate/selectionInterval con `yyyymmdd` |
+| 2c/5 | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH con la fecha hasta |
+| 3/5 | `ingresar_parametros` | F8 (`btn[8].press`) — ejecuta reporte |
+| 4/5 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) | `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `DY_PATH`/`DY_FILENAME` + `btn[11]` (Generar/Reemplazar; `btn[0]` no existe en este diálogo). Produce `SOX_<SOC>_<TIMESTAMP>.xlsx`. Si `EXPORT_METHOD="pc_list"` usa `%PC` + `btn[0]` (sólo aplica a listas clásicas, NO a AR15). |
+| 5/5 | `generar_xlsx_poblacion` (pure Python, post-SAP) | `openpyxl.load_workbook` del intermedio → copia contenido a una hoja `Original_SAP` → `wb.save("Población_<SOC>_<FECHA_HASTA>.xlsx")`. Es el deliverable final que devuelve `generar_reporte_sox`. Se omite si `EXPORT_METHOD=None`. |
 | Assign Files | 7 | `step_assign_files` | btn[32] + VK3 |
 | Read Data | 8 | `step_read_data` | btn[32] + btn[8] + 2×VK3 |
 | Display Read Data | (auto-avanza) | `step_display_read_data` | btn[32] + popup + VK3 |

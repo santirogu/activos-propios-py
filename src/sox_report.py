@@ -41,8 +41,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from openpyxl import Workbook, load_workbook
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SALIDA_DIR = PROJECT_ROOT / "salida"
+
+# Nombre estándar del archivo final entregable. Patrón:
+#   {STANDARD_FILE_PREFIX}_{SOCIEDAD}_{FECHA_HASTA}.xlsx
+# Ej: Población_ISA_31.03.2026.xlsx
+STANDARD_FILE_PREFIX = "Población"
+STANDARD_SHEET_NAME = "Original_SAP"
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -588,6 +596,83 @@ def exportar_a_excel(
     )
 
 
+def generar_xlsx_poblacion(
+    archivo_sap: Path,
+    carpeta_destino: Path,
+    sociedad: str,
+    fecha_hasta: str,
+) -> Path:
+    """Produce el .xlsx final con nombre estándar a partir del reporte SAP.
+
+    Lee el contenido del .xlsx que SAP exportó (típicamente `SOX_*.xlsx`) y
+    lo copia a un nuevo archivo con nombre estándar:
+
+        Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx
+
+    Ej: `Población_ISA_31.03.2026.xlsx`.
+
+    El nuevo archivo tiene una única hoja llamada `Original_SAP` con el
+    contenido del reporte original (sólo valores, sin fórmulas).
+
+    Args:
+        archivo_sap: ruta al .xlsx generado por SAP.
+        carpeta_destino: carpeta donde guardar el nuevo archivo.
+        sociedad: código normalizado (uppercase) de sociedad.
+        fecha_hasta: fecha hasta en formato dd.mm.aaaa (ya validada).
+
+    Returns:
+        Path al archivo Población_* creado.
+
+    Raises:
+        FileNotFoundError: si `archivo_sap` no existe.
+        ValueError: si openpyxl no puede leer el archivo (algunas versiones
+            de SAP exportan MHTML con extensión .xlsx — habría que
+            re-grabar la exportación con formato XLSX real).
+    """
+    if not archivo_sap.exists():
+        raise FileNotFoundError(
+            f"No se encontró el reporte SAP en {archivo_sap}.\n"
+            f"Verifica que la exportación SAP haya guardado el archivo "
+            f"correctamente antes de generar el .xlsx estándar."
+        )
+
+    _log(f"Leyendo reporte SAP: {archivo_sap.name}")
+    try:
+        wb_sap = load_workbook(archivo_sap, data_only=True)
+    except Exception as exc:
+        raise ValueError(
+            f"No se pudo abrir {archivo_sap.name} como .xlsx. "
+            f"Algunas versiones de SAP exportan MHTML con extensión .xlsx; "
+            f"si es ese tu caso, re-grabar la exportación con formato XLSX real. "
+            f"Detalle técnico: {exc!r}"
+        ) from exc
+
+    ws_sap = wb_sap.active
+
+    wb_new = Workbook()
+    ws_new = wb_new.active
+    ws_new.title = STANDARD_SHEET_NAME
+
+    rows_copiadas = 0
+    for row in ws_sap.iter_rows(values_only=True):
+        ws_new.append(row)
+        rows_copiadas += 1
+
+    fecha_norm = validar_fecha(fecha_hasta, etiqueta="fecha hasta").strftime(
+        DATE_FORMAT_USER
+    )
+    nombre_archivo = f"{STANDARD_FILE_PREFIX}_{sociedad}_{fecha_norm}.xlsx"
+    carpeta_destino.mkdir(parents=True, exist_ok=True)
+    ruta_destino = carpeta_destino / nombre_archivo
+    wb_new.save(ruta_destino)
+
+    _log(
+        f"Generado: {ruta_destino.name} ({rows_copiadas} filas, "
+        f"hoja '{STANDARD_SHEET_NAME}')"
+    )
+    return ruta_destino
+
+
 def generar_reporte_sox(
     session,
     sociedad: str,
@@ -596,18 +681,31 @@ def generar_reporte_sox(
     carpeta_destino: str | None = None,
     nombre_archivo: str | None = None,
 ) -> tuple[str, str]:
-    """Ejecuta el flujo SOX completo y devuelve (carpeta, nombre) usados.
+    """Ejecuta el flujo SOX completo y devuelve (carpeta, nombre) del
+    archivo final con nombre estándar `Población_*`.
+
+    Flujo:
+        1. Abrir AR15.
+        2. Ingresar parámetros y ejecutar reporte.
+        3. Exportar el grid a .xlsx (nombre intermedio SOX_*.xlsx).
+        4. Leer ese .xlsx y producir `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx`
+           con el contenido en la hoja `Original_SAP`.
+
+    Si `EXPORT_METHOD` es `None`, omite los pasos 3 y 4 (no hay archivo SAP
+    desde el cual generar el Población_*) y devuelve el nombre intermedio
+    como deliverable nominal.
 
     Args:
         session: sesión SAP GUI activa.
         sociedad: código de sociedad (debe estar en VALID_SOCIEDADES).
         fecha_desde: fecha inicial en formato dd.mm.aaaa.
         fecha_hasta: fecha final en formato dd.mm.aaaa.
-        carpeta_destino: ruta donde guardar el .xlsx (default: salida/).
-        nombre_archivo: nombre del .xlsx (default: SOX_{soc}_{ts}.xlsx).
+        carpeta_destino: ruta donde guardar los .xlsx (default: salida/).
+        nombre_archivo: nombre del intermedio SAP (default: SOX_{soc}_{ts}.xlsx).
 
     Returns:
-        (carpeta, nombre): rutas usadas para el guardado.
+        (carpeta, nombre) del archivo `Población_*` final. Si EXPORT_METHOD
+        es None, devuelve (carpeta, nombre del intermedio SAP).
     """
     sociedad_norm = validar_sociedad(sociedad)
     validar_rango_fechas(fecha_desde, fecha_hasta)
@@ -620,14 +718,30 @@ def generar_reporte_sox(
         nombre_archivo = f"SOX_{sociedad_norm}_{ts}.xlsx"
 
     inicio = time.monotonic()
-    _log("=== Iniciando flujo SOX (4 pasos) ===")
+    _log("=== Iniciando flujo SOX ===")
     abrir_transaccion_sox(session)
     ingresar_parametros(session, sociedad_norm, fecha_desde, fecha_hasta)
     exportar_a_excel(session, carpeta_destino, nombre_archivo)
+
+    if EXPORT_METHOD is None:
+        _log(
+            "EXPORT_METHOD=None → omitiendo generación del Población_*.xlsx "
+            "(no hay archivo SAP del cual leer)."
+        )
+        duracion = time.monotonic() - inicio
+        _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
+        return carpeta_destino, nombre_archivo
+
+    archivo_poblacion = generar_xlsx_poblacion(
+        Path(carpeta_destino) / nombre_archivo,
+        Path(carpeta_destino),
+        sociedad_norm,
+        fecha_hasta,
+    )
+
     duracion = time.monotonic() - inicio
     _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
-
-    return carpeta_destino, nombre_archivo
+    return str(archivo_poblacion.parent), archivo_poblacion.name
 
 
 # ---------------------------------------------------------------------------

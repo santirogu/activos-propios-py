@@ -5,11 +5,15 @@ Las funciones que dialogan con SAP GUI Scripting se prueban con
 la secuencia exacta de llamadas findById/.method.
 """
 
+import shutil
 import sys
+import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+from openpyxl import Workbook, load_workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -20,11 +24,14 @@ from sox_report import (  # noqa: E402
     CAMPO_SOCIEDAD,
     DOCS_GRID_SHELL,
     SOX_NODE_KEY,
+    STANDARD_FILE_PREFIX,
+    STANDARD_SHEET_NAME,
     TREE_SHELL,
     VALID_SOCIEDADES,
     abrir_transaccion_sox,
     exportar_a_excel,
     generar_reporte_sox,
+    generar_xlsx_poblacion,
     get_sap_session,
     ingresar_parametros,
     validar_caracter_fecha,
@@ -605,27 +612,39 @@ class GenerarReporteSoxTest(unittest.TestCase):
         session = MockSAPSession()
         call_order = []
 
-        def make_recorder(name):
-            return lambda *args, **kwargs: call_order.append(name)
+        def make_recorder(name, return_value=None):
+            def fn(*args, **kwargs):
+                call_order.append(name)
+                return return_value
+            return fn
 
+        fake_poblacion = Path("/tmp/Población_ISA_31.05.2026.xlsx")
         with patch.multiple(
             "sox_report",
             abrir_transaccion_sox=make_recorder("abrir"),
             ingresar_parametros=make_recorder("ingresar"),
             exportar_a_excel=make_recorder("exportar"),
+            generar_xlsx_poblacion=make_recorder("poblacion", fake_poblacion),
         ):
             generar_reporte_sox(
                 session, "ISA", "01.05.2026", "31.05.2026",
                 carpeta_destino="/tmp", nombre_archivo="x.xlsx",
             )
 
-        self.assertEqual(call_order, ["abrir", "ingresar", "exportar"])
+        self.assertEqual(
+            call_order, ["abrir", "ingresar", "exportar", "poblacion"]
+        )
 
     def test_normalizes_sociedad_before_passing(self):
         session = MockSAPSession()
+        fake_poblacion = Path("/tmp/Población_ISA_31.05.2026.xlsx")
         with patch("sox_report.ingresar_parametros") as mock_ing, \
              patch("sox_report.abrir_transaccion_sox"), \
-             patch("sox_report.exportar_a_excel"):
+             patch("sox_report.exportar_a_excel"), \
+             patch(
+                 "sox_report.generar_xlsx_poblacion",
+                 return_value=fake_poblacion,
+             ):
             generar_reporte_sox(
                 session, "isa", "01.05.2026", "31.05.2026",
                 carpeta_destino="/tmp", nombre_archivo="x.xlsx",
@@ -634,6 +653,31 @@ class GenerarReporteSoxTest(unittest.TestCase):
         mock_ing.assert_called_once_with(
             session, "ISA", "01.05.2026", "31.05.2026"
         )
+
+    def test_passes_normalized_sociedad_and_fecha_hasta_to_poblacion(self):
+        """`generar_xlsx_poblacion` recibe la sociedad normalizada (uppercase)
+        y la fecha hasta tal cual la ingresó el usuario (validada)."""
+        session = MockSAPSession()
+        fake_poblacion = Path("/tmp/Población_ISA_31.05.2026.xlsx")
+        with patch("sox_report.abrir_transaccion_sox"), \
+             patch("sox_report.ingresar_parametros"), \
+             patch("sox_report.exportar_a_excel"), \
+             patch(
+                 "sox_report.generar_xlsx_poblacion",
+                 return_value=fake_poblacion,
+             ) as mock_pob:
+            generar_reporte_sox(
+                session, "isa", "01.05.2026", "31.05.2026",
+                carpeta_destino="/tmp", nombre_archivo="SOX_x.xlsx",
+            )
+
+        # generar_xlsx_poblacion(archivo_sap, carpeta_destino, sociedad, fecha_hasta)
+        args, _ = mock_pob.call_args
+        archivo_sap, carpeta, sociedad, fecha = args
+        self.assertEqual(archivo_sap, Path("/tmp/SOX_x.xlsx"))
+        self.assertEqual(carpeta, Path("/tmp"))
+        self.assertEqual(sociedad, "ISA")
+        self.assertEqual(fecha, "31.05.2026")
 
     def test_raises_for_invalid_sociedad(self):
         session = MockSAPSession()
@@ -649,21 +693,167 @@ class GenerarReporteSoxTest(unittest.TestCase):
                 session, "ISA", "31.05.2026", "01.05.2026",
             )
 
-    def test_default_filename_includes_sociedad_and_timestamp(self):
+    def test_returns_poblacion_filename_with_sociedad_and_fecha_hasta(self):
+        """El deliverable final es Población_*, no SOX_* — el handler GUI
+        muestra ese nombre al usuario."""
         session = MockSAPSession()
+        fake_poblacion = Path("/anywhere/salida/Población_ISA_31.05.2026.xlsx")
         with patch("sox_report.abrir_transaccion_sox"), \
              patch("sox_report.ingresar_parametros"), \
-             patch("sox_report.exportar_a_excel") as mock_export:
+             patch("sox_report.exportar_a_excel"), \
+             patch(
+                 "sox_report.generar_xlsx_poblacion",
+                 return_value=fake_poblacion,
+             ):
             carpeta, nombre = generar_reporte_sox(
                 session, "ISA", "01.05.2026", "31.05.2026",
             )
 
-        self.assertTrue(nombre.startswith("SOX_ISA_"))
-        self.assertTrue(nombre.endswith(".xlsx"))
-        self.assertRegex(nombre, r"^SOX_ISA_\d{8}_\d{6}\.xlsx$")
-        # carpeta debe apuntar al directorio salida/ por default
-        self.assertTrue(carpeta.endswith("salida"))
-        mock_export.assert_called_once_with(session, carpeta, nombre)
+        self.assertEqual(nombre, "Población_ISA_31.05.2026.xlsx")
+        self.assertEqual(carpeta, "/anywhere/salida")
+
+    def test_export_method_none_skips_poblacion_and_returns_sap_intermediate(self):
+        """Si EXPORT_METHOD=None no hay archivo SAP del cual leer; se omite
+        la generación del Población_* y se devuelve el nombre intermedio."""
+        original_method = sox_report.EXPORT_METHOD
+        sox_report.EXPORT_METHOD = None
+        try:
+            session = MockSAPSession()
+            with patch("sox_report.abrir_transaccion_sox"), \
+                 patch("sox_report.ingresar_parametros"), \
+                 patch("sox_report.exportar_a_excel"), \
+                 patch("sox_report.generar_xlsx_poblacion") as mock_pob:
+                carpeta, nombre = generar_reporte_sox(
+                    session, "ISA", "01.05.2026", "31.05.2026",
+                    carpeta_destino="/tmp", nombre_archivo="SOX_x.xlsx",
+                )
+
+            mock_pob.assert_not_called()
+            self.assertEqual(nombre, "SOX_x.xlsx")
+            self.assertEqual(carpeta, "/tmp")
+        finally:
+            sox_report.EXPORT_METHOD = original_method
+
+
+# ---------------------------------------------------------------------------
+# generar_xlsx_poblacion (paso post-SAP)
+# ---------------------------------------------------------------------------
+
+
+class GenerarXlsxPoblacionTest(unittest.TestCase):
+    """Lee el .xlsx que SAP exportó y produce `Población_{SOC}_{FECHA}.xlsx`
+    con el contenido en la hoja `Original_SAP`."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="test_poblacion_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _crear_archivo_sap(self, filename, rows):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        for row in rows:
+            ws.append(row)
+        ruta = self.tmpdir / filename
+        wb.save(ruta)
+        return ruta
+
+    def test_creates_file_with_standard_name(self):
+        sap = self._crear_archivo_sap("SOX_ISA_x.xlsx", [["a", "b"]])
+        resultado = generar_xlsx_poblacion(sap, self.tmpdir, "ISA", "31.03.2026")
+
+        self.assertEqual(resultado.name, "Población_ISA_31.03.2026.xlsx")
+        self.assertTrue(resultado.exists())
+
+    def test_filename_uses_constants(self):
+        """El nombre se construye con las constantes — si se cambian, el
+        nombre cambia consistentemente."""
+        sap = self._crear_archivo_sap("SOX.xlsx", [["a"]])
+        resultado = generar_xlsx_poblacion(sap, self.tmpdir, "ITCH", "15.06.2027")
+
+        esperado = f"{STANDARD_FILE_PREFIX}_ITCH_15.06.2027.xlsx"
+        self.assertEqual(resultado.name, esperado)
+
+    def test_sheet_is_named_original_sap(self):
+        sap = self._crear_archivo_sap("SOX.xlsx", [["x"]])
+        resultado = generar_xlsx_poblacion(sap, self.tmpdir, "ISA", "31.03.2026")
+
+        wb = load_workbook(resultado)
+        self.assertEqual(wb.sheetnames, [STANDARD_SHEET_NAME])
+
+    def test_content_matches_source(self):
+        filas = [
+            ["Fecha", "Usuario", "Valor"],
+            ["2026-03-02", "INTC37089", "*** creado ***"],
+            ["2026-03-03", "INTC37090", "x"],
+        ]
+        sap = self._crear_archivo_sap("SOX.xlsx", filas)
+        resultado = generar_xlsx_poblacion(sap, self.tmpdir, "ISA", "31.03.2026")
+
+        wb = load_workbook(resultado)
+        ws = wb.active
+        leidas = [list(row) for row in ws.iter_rows(values_only=True)]
+        self.assertEqual(leidas, filas)
+
+    def test_preserves_datetime_and_numeric_types(self):
+        """El reporte SAP tiene columnas datetime/time/numeric — deben
+        preservarse, no convertirse a string."""
+        filas = [
+            ["Fecha", "Hora", "Monto"],
+            [datetime(2026, 3, 2, 0, 0), datetime(2026, 3, 2, 13, 0, 49).time(), 12345.67],
+        ]
+        sap = self._crear_archivo_sap("SOX.xlsx", filas)
+        resultado = generar_xlsx_poblacion(sap, self.tmpdir, "ISA", "31.03.2026")
+
+        wb = load_workbook(resultado)
+        ws = wb.active
+        row2 = list(ws.iter_rows(min_row=2, max_row=2, values_only=True))[0]
+        self.assertEqual(row2[0], datetime(2026, 3, 2, 0, 0))
+        self.assertEqual(row2[2], 12345.67)
+
+    def test_raises_when_source_file_missing(self):
+        with self.assertRaises(FileNotFoundError) as ctx:
+            generar_xlsx_poblacion(
+                self.tmpdir / "no_existe.xlsx",
+                self.tmpdir,
+                "ISA",
+                "31.03.2026",
+            )
+        self.assertIn("reporte SAP", str(ctx.exception))
+
+    def test_raises_value_error_when_source_is_not_xlsx(self):
+        """Algunas versiones de SAP exportan MHTML con extensión .xlsx —
+        openpyxl falla, debemos dar un error accionable."""
+        fake = self.tmpdir / "fake.xlsx"
+        fake.write_text("este no es un xlsx real", encoding="utf-8")
+
+        with self.assertRaises(ValueError) as ctx:
+            generar_xlsx_poblacion(fake, self.tmpdir, "ISA", "31.03.2026")
+        self.assertIn("MHTML", str(ctx.exception))
+
+    def test_creates_destination_folder_if_missing(self):
+        sap = self._crear_archivo_sap("SOX.xlsx", [["a"]])
+        dest = self.tmpdir / "subdir" / "nested"
+        resultado = generar_xlsx_poblacion(sap, dest, "ISA", "31.03.2026")
+
+        self.assertTrue(resultado.exists())
+        self.assertEqual(resultado.parent, dest)
+
+    def test_fecha_with_whitespace_is_normalized(self):
+        """fecha_hasta se re-formatea con validar_fecha→strftime, así que
+        whitespace alrededor se normaliza en el nombre del archivo."""
+        sap = self._crear_archivo_sap("SOX.xlsx", [["a"]])
+        resultado = generar_xlsx_poblacion(
+            sap, self.tmpdir, "ISA", "  31.03.2026  "
+        )
+        self.assertEqual(resultado.name, "Población_ISA_31.03.2026.xlsx")
+
+    def test_raises_for_invalid_fecha_hasta(self):
+        sap = self._crear_archivo_sap("SOX.xlsx", [["a"]])
+        with self.assertRaises(ValueError):
+            generar_xlsx_poblacion(sap, self.tmpdir, "ISA", "no-es-fecha")
 
 
 # ---------------------------------------------------------------------------

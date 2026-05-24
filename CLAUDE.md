@@ -135,24 +135,28 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 - `CALENDAR_SHELL = "wnd[1]/usr/cntlCONTAINER/shellcont/shell"` — calendario emergente F4.
 - `DATE_FORMAT_USER = "%d.%m.%Y"` (formulario) y `DATE_FORMAT_SAP_CALENDAR = "%Y%m%d"` (calendario SAP).
 - Campos: `CAMPO_SOCIEDAD = "wnd[0]/usr/ctxtP_BUKRS"`, `CAMPO_FECHA_DESDE = "wnd[0]/usr/ctxtS_DATUM-LOW"`, `CAMPO_FECHA_HASTA = "wnd[0]/usr/ctxtS_DATUM-HIGH"`.
-- `EXPORT_METHOD = "alv_grid"` (default) — usa `&MB_EXPORT > &XXL` sobre `DOCS_GRID_SHELL`. Confirmado por `resources/Script2sox.vbs` para AR15 (que muestra un ALV grid, no lista clásica). Alternativas: `"pc_list"` (usa `%PC`, sólo aplica a listas clásicas — NO funciona en AR15) o `None` (deja al usuario guardar manualmente).
+- `EXPORT_METHOD = "alv_grid"` (default) — usa `&MB_EXPORT > &XXL` sobre `DOCS_GRID_SHELL`. Confirmado por `resources/Script2sox.vbs` para AR15 (que muestra un ALV grid, no lista clásica). Alternativas: `"pc_list"` (usa `%PC`, sólo aplica a listas clásicas — NO funciona en AR15) o `None` (deja al usuario guardar manualmente y omite el paso 5).
 - `ALV_SAVE_DIALOG_OK_BTN = "btn[11]"` — el diálogo de save abierto por `&XXL` en AR15 confirma con `btn[11]` (Generar/Reemplazar). `btn[0]` no existe en ese diálogo y fue el origen del error `"The control could not be found by id"` cuando el default era `pc_list`. `_rellenar_save_dialog(..., boton_ok_id=...)` permite parametrizar cuál botón presionar.
+- `STANDARD_FILE_PREFIX = "Población"` y `STANDARD_SHEET_NAME = "Original_SAP"` — usados por `generar_xlsx_poblacion` para nombrar el archivo final y la hoja interna. Patrón: `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx`.
 
-### Mapeo del flujo (4 pasos)
+### Mapeo del flujo (5 pasos)
 
-| # | Función | Acciones SAP |
+| # | Función | Acciones SAP / Python |
 |---|---|---|
 | 1 | `abrir_transaccion_sox` | maximize + okcd="AR15" + Enter. Fallback: `tree.doubleClickNode("F00039")` |
 | 2a | `ingresar_parametros` | `P_BUKRS.text = sociedad` |
 | 2b | `_seleccionar_fecha_calendario` (Desde) | foco campo + caretPosition 0 + F4 → calendar.focusDate / selectionInterval con `yyyymmdd` |
 | 2c | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH |
 | 3 | `ingresar_parametros` | F8 (ejecuta el reporte) |
-| 4 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) o `_exportar_via_pc_list` | ALV: `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `_rellenar_save_dialog(..., boton_ok_id="btn[11]")`. PC: `%PC` + manejo de variantes A/B/C del save-as + `_rellenar_save_dialog(..., boton_ok_id="btn[0]")` |
+| 4 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) o `_exportar_via_pc_list` | ALV: `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `_rellenar_save_dialog(..., boton_ok_id="btn[11]")`. PC: `%PC` + manejo de variantes A/B/C del save-as + `_rellenar_save_dialog(..., boton_ok_id="btn[0]")`. Produce `SOX_{SOC}_{YYYYMMDD_HHMMSS}.xlsx` intermedio. |
+| 5 | `generar_xlsx_poblacion` (post-SAP, pure Python) | Lee el intermedio con openpyxl, copia su contenido a una nueva hoja `Original_SAP` y guarda como `Población_{SOC}_{FECHA_HASTA}.xlsx`. Es el **deliverable final** que devuelve `generar_reporte_sox`. Si `EXPORT_METHOD=None`, este paso se omite. |
 
 ### Helpers
 - `validar_sociedad` / `validar_fecha` / `validar_rango_fechas` / `validar_caracter_fecha` — validaciones puras, testeables sin SAP.
 - `_intentar_listar_nodos_arbol(tree)` — diagnóstico: enumera nodos del árbol SAP (`GetAllNodeKeys` + `GetNodeTextByKey`) cuando falla `doubleClickNode`. Mensaje de error sugiere descubrir la T-code real vía "Sistema → Estado".
-- Salida: `SOX_{SOCIEDAD}_{YYYYMMDD_HHMMSS}.xlsx` en `salida/`.
+- Salida: dos archivos en `salida/`:
+  - **Intermedio:** `SOX_{SOCIEDAD}_{YYYYMMDD_HHMMSS}.xlsx` (lo que SAP exportó).
+  - **Final / deliverable:** `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx` (con el contenido del intermedio en la hoja `Original_SAP`). El handler GUI muestra este nombre al usuario.
 
 ### CLI
 ```bash
@@ -181,9 +185,9 @@ Exit codes: 0 OK, 1 error (validación o SAP), 2 uso incorrecto.
 - `patch.multiple("sap_upload", ...)` inyecta mocks; se guardan en `self.mocks`.
 
 ### Distribución
-- `tests/test_main.py` (63): `ExportSheetToTsvTest` (9), `RealWorkbookSmokeTest` (1), `ExtraerLsmwATxtTest` (7), `ExtraerLsmwATxtErrorPathsTest` (4), `ShowUnexpectedErrorTest` (1), `InstallTkExceptionHandlerTest` (2), `HayTxtEnSalidaTest` (4), `RefrescarEstadoBotonSubirTest` (3), `PollEstadoBotonSubirTest` (1), `SubirASapFlagTest` (5), `ControlSoxDialogTest` (7), `GenerarReporteSoxHandlerTest` (8), `SubirASapTest` (11).
-- `tests/test_sox_report.py` (42): validaciones puras + cada paso del flujo SOX + entry point.
-- `tests/test_sap_upload.py` (36): cada paso del flujo LSMW + `MainEntryPointTest` (pasa carpeta y nombre del .txt al flujo).
+- `tests/test_main.py` (63): handlers GUI, extracción TSV, diálogo SOX.
+- `tests/test_sox_report.py` (71): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (10 tests del paso post-SAP que produce el `Población_*.xlsx`) + `GenerarReporteSoxTest` (incluye verificación de que el orquestador pasa sociedad normalizada y fecha_hasta al paso Población, y que `EXPORT_METHOD=None` salta ese paso).
+- `tests/test_sap_upload.py` (36): cada paso del flujo LSMW + `MainEntryPointTest`.
 
 ### Cómo ejecutar
 ```bash
@@ -232,4 +236,8 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 - **Import lazy de `sap_upload` / `sox_report` dentro del worker** — permite que `main.py` arranque en macOS/Linux sin pywin32 (los botones SAP fallan al ejecutarse, pero la GUI carga).
 - **Hoja `"LSMW "` con espacio final** — así está nombrada en el Excel; si se quita el espacio se rompe el lookup.
 - **Polling cada 1s para habilitar "Subir a SAP"** — más simple que un watcher de filesystem y suficiente para la cadencia de uso esperada.
-- **EXPORT_METHOD configurable** — `"pc_list"` (default) para listas SAP clásicas vía `%PC`; `"alv_grid"` para grids ALV con `&MB_EXPORT > &XXL`; `None` para no exportar. AR15 usa lista clásica → `pc_list`.
+- **EXPORT_METHOD configurable** — `"alv_grid"` (default) para grids ALV con `&MB_EXPORT > &XXL`; `"pc_list"` para listas SAP clásicas vía `%PC`; `None` para no exportar. AR15 muestra un ALV grid, confirmado por `resources/Script2sox.vbs`.
+- **Dos archivos en `salida/` por corrida del SOX** — el intermedio `SOX_*.xlsx` (lo que SAP produjo, nombre con timestamp) y el final `Población_*.xlsx` (lo que `generar_xlsx_poblacion` produjo a partir del anterior). Se conservan ambos; el handler GUI muestra el nombre del final al usuario.
+- **`generar_xlsx_poblacion` es paso post-SAP, no SAP** — corre puro Python con openpyxl después de que SAP guardó su archivo. Esto permite testearlo sin mockear SAP (usar tempdir + .xlsx real) y separar la lógica de "qué hace SAP" de "cómo se llama el deliverable final".
+- **Nombre estándar `Población_{SOC}_{FECHA_HASTA}.xlsx`** — formato fijo pedido por el cliente. La fecha es la `fecha_hasta` que el usuario ingresó (dd.mm.aaaa), re-formateada vía `validar_fecha→strftime` para normalizar whitespace y garantizar formato consistente.
+- **openpyxl no preserva strings vacías en round-trip** — guarda celda vacía → lee `None`. Para el reporte SOX esto es funcionalmente equivalente; los tests usan datos sin strings vacías para evitar la confusión.
