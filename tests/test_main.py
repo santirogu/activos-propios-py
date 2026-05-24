@@ -849,88 +849,114 @@ class SubirASapFlagTest(unittest.TestCase):
 
 
 class ControlSoxDialogTest(unittest.TestCase):
-    """Verifica la construcción del diálogo Control SOX y sus validaciones
-    declarativas (combobox readonly, valores válidos, tecla restringida en
-    fechas)."""
+    """Verifica que `control_sox` reemplaza la vista del menú (frame_menu)
+    por el formulario SOX (frame_sox) en la misma ventana, expone las
+    StringVars/widgets como atributos del frame, y que el botón Atrás
+    revierte la vista al menú."""
 
     def setUp(self) -> None:
         self.root = tk.Tk()
         self.root.withdraw()
+        # Replicamos la estructura que construye `main.main()`: el menú
+        # principal vive dentro de un Frame que `control_sox` puede ocultar.
+        self.frame_menu = tk.Frame(self.root)
+        self.frame_menu.pack(fill="both", expand=True)
 
     def tearDown(self) -> None:
         self.root.destroy()
 
-    def test_dialog_has_sociedad_combobox_with_valid_values(self) -> None:
-        dialog = main.control_sox(self.root)
+    def test_hides_frame_menu_when_invoked(self) -> None:
+        """Al entrar al form SOX, el menú deja de estar gestionado por pack."""
+        self.assertTrue(self.frame_menu.winfo_manager())  # actualmente packed
+        frame_sox = main.control_sox(self.root, self.frame_menu)
+        try:
+            self.assertEqual(self.frame_menu.winfo_manager(), "")
+        finally:
+            frame_sox.destroy()
+
+    def test_frame_has_sociedad_combobox_with_valid_values(self) -> None:
+        frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
             from sox_report import VALID_SOCIEDADES
             self.assertEqual(
-                tuple(dialog.sociedad_combo["values"]), VALID_SOCIEDADES
+                tuple(frame_sox.sociedad_combo["values"]), VALID_SOCIEDADES
             )
         finally:
-            dialog.destroy()
+            frame_sox.destroy()
 
     def test_sociedad_combobox_is_readonly(self) -> None:
-        dialog = main.control_sox(self.root)
+        frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            self.assertEqual(str(dialog.sociedad_combo["state"]), "readonly")
+            self.assertEqual(str(frame_sox.sociedad_combo["state"]), "readonly")
         finally:
-            dialog.destroy()
+            frame_sox.destroy()
 
-    def test_dialog_exposes_form_state_variables(self) -> None:
-        dialog = main.control_sox(self.root)
+    def test_frame_exposes_form_state_variables(self) -> None:
+        frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            self.assertIsInstance(dialog.sociedad_var, tk.StringVar)
-            self.assertIsInstance(dialog.desde_var, tk.StringVar)
-            self.assertIsInstance(dialog.hasta_var, tk.StringVar)
-            self.assertIsInstance(dialog.status_var, tk.StringVar)
+            self.assertIsInstance(frame_sox.sociedad_var, tk.StringVar)
+            self.assertIsInstance(frame_sox.desde_var, tk.StringVar)
+            self.assertIsInstance(frame_sox.hasta_var, tk.StringVar)
+            self.assertIsInstance(frame_sox.status_var, tk.StringVar)
         finally:
-            dialog.destroy()
+            frame_sox.destroy()
 
-    def test_dialog_title(self) -> None:
-        dialog = main.control_sox(self.root)
+    def test_frame_exposes_back_button(self) -> None:
+        """El form debe tener un botón Atrás expuesto como `btn_atras`."""
+        frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            self.assertEqual(dialog.title(), "Control SOX")
+            self.assertIsInstance(frame_sox.btn_atras, tk.Button)
         finally:
-            dialog.destroy()
+            frame_sox.destroy()
+
+    def test_back_button_destroys_form_and_reshows_menu(self) -> None:
+        """Click en Atrás → frame_sox se destruye y frame_menu vuelve a
+        mostrarse en la ventana principal."""
+        frame_sox = main.control_sox(self.root, self.frame_menu)
+        # menú oculto mientras estamos en el form
+        self.assertEqual(self.frame_menu.winfo_manager(), "")
+
+        frame_sox.btn_atras.invoke()
+
+        self.assertFalse(frame_sox.winfo_exists())
+        self.assertEqual(self.frame_menu.winfo_manager(), "pack")
 
     def test_date_fields_use_date_entry_calendar_widget(self) -> None:
         """Los campos Desde y Hasta deben ser DateEntry (tkcalendar) para
         que el usuario pueda elegir la fecha de un calendario emergente."""
         from tkcalendar import DateEntry
 
-        dialog = main.control_sox(self.root)
+        frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            self.assertIsInstance(dialog.desde_entry, DateEntry)
-            self.assertIsInstance(dialog.hasta_entry, DateEntry)
+            self.assertIsInstance(frame_sox.desde_entry, DateEntry)
+            self.assertIsInstance(frame_sox.hasta_entry, DateEntry)
         finally:
-            dialog.destroy()
+            frame_sox.destroy()
 
     def test_date_entries_emit_value_in_ddmmyyyy_format(self) -> None:
         """El valor que escriben los DateEntry en la StringVar debe estar
         en formato dd.mm.aaaa, listo para validar_fecha."""
         from datetime import date
 
-        dialog = main.control_sox(self.root)
+        frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            # Forzar una fecha concreta via la API del widget
-            dialog.desde_entry.set_date(date(2026, 5, 1))
-            dialog.hasta_entry.set_date(date(2026, 5, 31))
-            self.assertEqual(dialog.desde_var.get(), "01.05.2026")
-            self.assertEqual(dialog.hasta_var.get(), "31.05.2026")
+            frame_sox.desde_entry.set_date(date(2026, 5, 1))
+            frame_sox.hasta_entry.set_date(date(2026, 5, 31))
+            self.assertEqual(frame_sox.desde_var.get(), "01.05.2026")
+            self.assertEqual(frame_sox.hasta_var.get(), "31.05.2026")
         finally:
-            dialog.destroy()
+            frame_sox.destroy()
 
     def test_date_entries_initialize_with_today(self) -> None:
-        """Al abrir el diálogo, los DateEntry arrancan con la fecha actual."""
+        """Al entrar al form, los DateEntry arrancan con la fecha actual."""
         from datetime import date
 
-        dialog = main.control_sox(self.root)
+        frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            self.assertEqual(dialog.desde_entry.get_date(), date.today())
-            self.assertEqual(dialog.hasta_entry.get_date(), date.today())
+            self.assertEqual(frame_sox.desde_entry.get_date(), date.today())
+            self.assertEqual(frame_sox.hasta_entry.get_date(), date.today())
         finally:
-            dialog.destroy()
+            frame_sox.destroy()
 
 
 class GenerarReporteSoxHandlerTest(unittest.TestCase):
@@ -938,28 +964,30 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
     - validación previa muestra error si los inputs no son válidos
     - cancelar la confirmación no lanza el worker
     - el worker pasa los argumentos correctos al flujo SAP
-    - errores del worker se muestran al usuario y reactivan el botón
+    - errores del worker se muestran al usuario y reactivan los botones
+    - el botón Atrás se deshabilita durante el worker y se reactiva después
     """
 
     def setUp(self) -> None:
         self.root = tk.Tk()
         self.root.withdraw()
-        self.dialog = tk.Toplevel(self.root)
-        self.dialog.withdraw()
-        self.dialog.after = lambda delay, fn, *args: fn(*args)
-        self.status_var = tk.StringVar(master=self.dialog)
-        self.button = tk.Button(self.dialog)
+        # Stub `root.after` para ejecutar callbacks inmediatamente (en vez
+        # de programarlos en el event loop) — los callbacks thread-safe del
+        # handler usan root.after en lugar del antiguo dialog.after.
+        self.root.after = lambda delay, fn, *args: fn(*args)
+        self.status_var = tk.StringVar(master=self.root)
+        self.button = tk.Button(self.root)
+        self.btn_atras = tk.Button(self.root)
 
     def tearDown(self) -> None:
-        self.dialog.destroy()
         self.root.destroy()
 
     def test_shows_error_on_invalid_sociedad(self) -> None:
         with patch("main.messagebox.showerror") as mock_err, \
              patch("main.messagebox.askyesno") as mock_ask:
             main._generar_reporte_sox_handler(
-                self.dialog, "XYZ", "01.05.2026", "31.05.2026",
-                self.status_var, self.button,
+                self.root, "XYZ", "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
             )
 
         mock_err.assert_called_once()
@@ -972,8 +1000,8 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
         with patch("main.messagebox.showerror") as mock_err, \
              patch("main.messagebox.askyesno"):
             main._generar_reporte_sox_handler(
-                self.dialog, "ISA", "no-es-fecha", "31.05.2026",
-                self.status_var, self.button,
+                self.root, "ISA", "no-es-fecha", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
             )
 
         mock_err.assert_called_once()
@@ -983,8 +1011,8 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
         with patch("main.messagebox.showerror") as mock_err, \
              patch("main.messagebox.askyesno"):
             main._generar_reporte_sox_handler(
-                self.dialog, "ISA", "31.05.2026", "01.05.2026",
-                self.status_var, self.button,
+                self.root, "ISA", "31.05.2026", "01.05.2026",
+                self.status_var, self.button, self.btn_atras,
             )
 
         mock_err.assert_called_once()
@@ -995,8 +1023,8 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
         with patch("main.messagebox.askyesno", return_value=False), \
              patch("main.threading.Thread") as mock_thread:
             main._generar_reporte_sox_handler(
-                self.dialog, "ISA", "01.05.2026", "31.05.2026",
-                self.status_var, self.button,
+                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
             )
 
         mock_thread.assert_not_called()
@@ -1008,11 +1036,11 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
              patch("sox_report.get_sap_session", return_value=MagicMock()), \
              patch(
                  "sox_report.generar_reporte_sox",
-                 return_value=("/tmp/salida", "SOX_ISA_x.xlsx"),
+                 return_value=("/tmp/salida", "Población_ISA_31.05.2026.xlsx"),
              ) as mock_flow:
             main._generar_reporte_sox_handler(
-                self.dialog, "isa", "01.05.2026", "31.05.2026",
-                self.status_var, self.button,
+                self.root, "isa", "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
             )
 
         mock_flow.assert_called_once()
@@ -1022,7 +1050,9 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
         self.assertEqual(args[2], "01.05.2026")
         self.assertEqual(args[3], "31.05.2026")
 
-    def test_worker_disables_button_during_execution_and_reenables_after(self) -> None:
+    def test_worker_disables_buttons_during_execution_and_reenables_after(self) -> None:
+        """Tanto el botón Generar como el Atrás deben re-habilitarse tras
+        el worker (no queremos dejar al usuario sin forma de volver)."""
         with patch("main.messagebox.askyesno", return_value=True), \
              patch("main.messagebox.showinfo"), \
              patch("main.threading.Thread", _SyncFakeThread), \
@@ -1032,12 +1062,42 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
                  return_value=("/tmp", "x.xlsx"),
              ):
             main._generar_reporte_sox_handler(
-                self.dialog, "ISA", "01.05.2026", "31.05.2026",
-                self.status_var, self.button,
+                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
             )
 
-        # tras el worker, debe estar habilitado de nuevo
         self.assertEqual(str(self.button["state"]), "normal")
+        self.assertEqual(str(self.btn_atras["state"]), "normal")
+
+    def test_back_button_disabled_during_worker(self) -> None:
+        """El botón Atrás se deshabilita ANTES de lanzar el worker para
+        evitar que el usuario vuelva al menú a mitad de un flujo SAP."""
+        # Capturamos el estado del btn_atras justo después de pasar la
+        # validación + confirmación, antes de que el worker (síncrono via
+        # _SyncFakeThread) lo reactive al final.
+        estado_durante_worker = []
+
+        original_thread = _SyncFakeThread
+
+        class CapturingFakeThread(_SyncFakeThread):
+            def start(inner_self):
+                estado_durante_worker.append(str(self.btn_atras["state"]))
+                super().start()
+
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", CapturingFakeThread), \
+             patch("sox_report.get_sap_session", return_value=MagicMock()), \
+             patch(
+                 "sox_report.generar_reporte_sox",
+                 return_value=("/tmp", "x.xlsx"),
+             ):
+            main._generar_reporte_sox_handler(
+                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
+            )
+
+        self.assertEqual(estado_durante_worker, ["disabled"])
 
     def test_worker_shows_error_when_sap_session_fails(self) -> None:
         with patch("main.messagebox.askyesno", return_value=True), \
@@ -1048,8 +1108,8 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
                  side_effect=RuntimeError("no SAP"),
              ):
             main._generar_reporte_sox_handler(
-                self.dialog, "ISA", "01.05.2026", "31.05.2026",
-                self.status_var, self.button,
+                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
             )
 
         mock_err.assert_called_once()
@@ -1066,8 +1126,8 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
                  side_effect=Exception("paso 4 falló"),
              ):
             main._generar_reporte_sox_handler(
-                self.dialog, "ISA", "01.05.2026", "31.05.2026",
-                self.status_var, self.button,
+                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
             )
 
         mock_err.assert_called_once()
@@ -1087,8 +1147,8 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
             mock_cm.return_value.__enter__ = MagicMock(return_value=None)
             mock_cm.return_value.__exit__ = MagicMock(return_value=False)
             main._generar_reporte_sox_handler(
-                self.dialog, "ISA", "01.05.2026", "31.05.2026",
-                self.status_var, self.button,
+                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
             )
 
         mock_cm.assert_called_once()

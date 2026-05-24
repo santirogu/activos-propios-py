@@ -60,7 +60,7 @@ Ventana principal (480x380, no redimensionable) con cuatro controles:
 |---|---|---|
 | **Extraer información en txt** | `extraer_lsmw_a_txt` | Cualquier OS |
 | **Subir a SAP** | `subir_a_sap` (arranca *disabled*; polling cada 1s habilita/deshabilita según `LSMW_*.txt` presentes en `salida/`) | Solo Windows |
-| **Control SOX** | `control_sox` (abre `Toplevel` modal con Sociedad + Desde + Hasta) | Solo Windows |
+| **Control SOX** | `control_sox(root, frame_menu)` — **reemplaza la vista del menú** en la misma ventana por un formulario con Sociedad + Desde + Hasta. Botón "← Atrás" arriba devuelve la vista al menú. **No abre Toplevel** (la versión original lo hacía). | Solo Windows |
 | **Test conexión SAP** | `_test_conexion_sap_handler` (diagnóstico, estilo secundario) | Solo Windows |
 
 ### Detalles importantes
@@ -80,14 +80,16 @@ Ventana principal (480x380, no redimensionable) con cuatro controles:
 - Sin previos → genera directamente `LSMW_YYYYMMDD_HHMMSS.txt`.
 - Validaciones manejadas explícitamente: `FileNotFoundError` (Excel ausente), `ValueError` (hoja ausente), `Exception` (genérica del export), y red de seguridad que muestra traceback completo.
 
-### Diálogo Control SOX
+### Vista Control SOX (frame embebido, no Toplevel)
 
+- **Patrón de switching de vistas:** `main()` envuelve todos los widgets del menú en un `frame_menu` (en vez de poner los widgets directo en `root`). Cuando el usuario presiona "Control SOX", `control_sox(root, frame_menu)` hace `frame_menu.pack_forget()` y muestra un nuevo `frame_sox` con el formulario + un botón "← Atrás". El click en Atrás destruye `frame_sox` y re-empaca `frame_menu`. El estado del menú (status_var, polling, flag `_upload_en_curso`) se preserva porque sólo se oculta, no se destruye.
 - **Sociedad**: `ttk.Combobox` en estado `readonly` (el usuario no puede escribir libre). Opciones: `TRAN, ISA, ITCH, CEYBA, CABA, RPAE, CTMP, REPD, ISAP`.
 - **Desde/Hasta**: `DateEntry` de tkcalendar con `date_pattern="dd.mm.yyyy"`. Validación per-keystroke (`validar_caracter_fecha`) acepta solo dígitos y puntos, máx 10 caracteres. Inicializa con la fecha actual.
 - Validaciones al pulsar **Generar Reporte SOX**:
   1. Sociedad en lista permitida (normaliza con `.strip().upper()`).
   2. Ambas fechas formato `dd.mm.aaaa` válido.
   3. `Hasta >= Desde`.
+- **Durante el worker SOX**: tanto el botón Generar como el Atrás se deshabilitan; ambos se re-habilitan al finalizar (éxito o error). El usuario no puede volver al menú a mitad de un flujo SAP. Se logra porque `_generar_reporte_sox_handler` recibe ahora `(root, ..., button, btn_atras)` y usa `root.after` (no el viejo `dialog.after`) para callbacks thread-safe.
 
 ## 5. Flujo SAP LSMW — `src/sap_upload.py`
 
@@ -149,7 +151,7 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 | 2c | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH |
 | 3 | `ingresar_parametros` | F8 (ejecuta el reporte) |
 | 4 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) o `_exportar_via_pc_list` | ALV: `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `_rellenar_save_dialog(..., boton_ok_id="btn[11]")`. PC: `%PC` + manejo de variantes A/B/C del save-as + `_rellenar_save_dialog(..., boton_ok_id="btn[0]")`. Produce `SOX_{SOC}_{YYYYMMDD_HHMMSS}.xlsx` intermedio. |
-| 5 | `generar_xlsx_poblacion` (post-SAP, pure Python) | Lee el intermedio con openpyxl, copia su contenido a una nueva hoja `Original_SAP` y guarda como `Población_{SOC}_{FECHA_HASTA}.xlsx`. Es el **deliverable final** que devuelve `generar_reporte_sox`. Si `EXPORT_METHOD=None`, este paso se omite. |
+| 5 | `generar_xlsx_poblacion` (post-SAP, pure Python) | Lee el intermedio con openpyxl, copia su contenido (celda por celda, preservando `number_format` para que Fecha y Hora se vean como en SAP) a una nueva hoja `Original_SAP` y guarda como `Población_{SOC}_{FECHA_HASTA}.xlsx`. Es el **deliverable final** que devuelve `generar_reporte_sox`. Si `EXPORT_METHOD=None`, este paso se omite. |
 
 ### Helpers
 - `validar_sociedad` / `validar_fecha` / `validar_rango_fechas` / `validar_caracter_fecha` — validaciones puras, testeables sin SAP.
@@ -185,9 +187,9 @@ Exit codes: 0 OK, 1 error (validación o SAP), 2 uso incorrecto.
 - `patch.multiple("sap_upload", ...)` inyecta mocks; se guardan en `self.mocks`.
 
 ### Distribución
-- `tests/test_main.py` (63): handlers GUI, extracción TSV, diálogo SOX.
-- `tests/test_sox_report.py` (71): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (10 tests del paso post-SAP que produce el `Población_*.xlsx`) + `GenerarReporteSoxTest` (incluye verificación de que el orquestador pasa sociedad normalizada y fecha_hasta al paso Población, y que `EXPORT_METHOD=None` salta ese paso).
-- `tests/test_sap_upload.py` (36): cada paso del flujo LSMW + `MainEntryPointTest`.
+- `tests/test_main.py` (75): handlers GUI, extracción TSV, vista SOX como frame embebido (`ControlSoxDialogTest` verifica el ocultado del menú, exposición del botón Atrás, y reversión al menú; `GenerarReporteSoxHandlerTest` verifica que ambos botones Generar+Atrás se deshabilitan durante el worker).
+- `tests/test_sox_report.py` (72): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso post-SAP que produce el `Población_*.xlsx`, incluye preservación de `number_format` por celda) + `GenerarReporteSoxTest` (incluye verificación de que el orquestador pasa sociedad normalizada y fecha_hasta al paso Población, y que `EXPORT_METHOD=None` salta ese paso).
+- `tests/test_sap_upload.py` (46): cada paso del flujo LSMW + `MainEntryPointTest`.
 
 ### Cómo ejecutar
 ```bash
@@ -241,3 +243,5 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 - **`generar_xlsx_poblacion` es paso post-SAP, no SAP** — corre puro Python con openpyxl después de que SAP guardó su archivo. Esto permite testearlo sin mockear SAP (usar tempdir + .xlsx real) y separar la lógica de "qué hace SAP" de "cómo se llama el deliverable final".
 - **Nombre estándar `Población_{SOC}_{FECHA_HASTA}.xlsx`** — formato fijo pedido por el cliente. La fecha es la `fecha_hasta` que el usuario ingresó (dd.mm.aaaa), re-formateada vía `validar_fecha→strftime` para normalizar whitespace y garantizar formato consistente.
 - **openpyxl no preserva strings vacías en round-trip** — guarda celda vacía → lee `None`. Para el reporte SOX esto es funcionalmente equivalente; los tests usan datos sin strings vacías para evitar la confusión.
+- **`generar_xlsx_poblacion` copia celda por celda (no `iter_rows(values_only=True)`)** — para preservar `number_format`. SAP usa `'mm-dd-yy'` para Fecha y `'[$-F400]h:mm:ss\ AM/PM'` para Hora; sin esto el usuario veía `2026-03-02 0:00:00` y `13:00:49` (defaults de openpyxl) en vez del formato corto + AM/PM del original SAP. Solo se copia `value` y `number_format`, no estilos completos (font/fill/border) — el archivo Población es más liviano y la única diferencia visual relevante eran las columnas de tiempo.
+- **Control SOX usa frame switching, no Toplevel** — `main()` empaca todos los widgets del menú en `frame_menu`. `control_sox(root, frame_menu)` hace `pack_forget` del menú y muestra `frame_sox` en `root`; el botón "← Atrás" destruye `frame_sox` y re-empaca `frame_menu`. Razón: UX más fluida (una sola ventana, sin saltos de focus a un Toplevel). Las StringVars/widgets del menú se preservan porque sólo se oculta el frame, no se destruye — el polling del botón "Subir a SAP" sigue activo incluso mientras el usuario está en el form SOX.

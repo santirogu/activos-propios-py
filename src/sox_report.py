@@ -653,9 +653,18 @@ def generar_xlsx_poblacion(
     ws_new = wb_new.active
     ws_new.title = STANDARD_SHEET_NAME
 
+    # Copiar celda por celda preservando `number_format` — sin esto, las
+    # columnas Fecha y Hora se ven con el formato default de openpyxl
+    # (ISO + 24h) en vez del formato corto + AM/PM que usa SAP.
     rows_copiadas = 0
-    for row in ws_sap.iter_rows(values_only=True):
-        ws_new.append(row)
+    for row in ws_sap.iter_rows():
+        for cell in row:
+            new_cell = ws_new.cell(
+                row=cell.row,
+                column=cell.column,
+                value=cell.value,
+            )
+            new_cell.number_format = cell.number_format
         rows_copiadas += 1
 
     fecha_norm = validar_fecha(fecha_hasta, etiqueta="fecha hasta").strftime(

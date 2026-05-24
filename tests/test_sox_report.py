@@ -813,6 +813,35 @@ class GenerarXlsxPoblacionTest(unittest.TestCase):
         self.assertEqual(row2[0], datetime(2026, 3, 2, 0, 0))
         self.assertEqual(row2[2], 12345.67)
 
+    def test_preserves_number_format_per_cell(self):
+        """SAP usa number_format específico para Fecha (`mm-dd-yy`) y Hora
+        (`[$-F400]h:mm:ss\\ AM/PM`). Sin copiar number_format, openpyxl
+        renderiza datetime/time con formato default (ISO + 24h) y el usuario
+        ve `2026-03-02 0:00:00` y `13:00:49` en vez de `2/03/2026` y
+        `1:00:49 p. m.` como en el original SAP."""
+        # Crear source con number_format específicos por celda
+        wb = Workbook()
+        ws = wb.active
+        ws.cell(1, 1, "Fecha")
+        ws.cell(1, 2, "Hora")
+        ws.cell(2, 1, datetime(2026, 3, 2)).number_format = "mm-dd-yy"
+        ws.cell(2, 2, datetime(2026, 3, 2, 13, 0, 49).time()).number_format = (
+            "[$-F400]h:mm:ss\\ AM/PM"
+        )
+        sap = self.tmpdir / "SOX_format.xlsx"
+        wb.save(sap)
+
+        resultado = generar_xlsx_poblacion(sap, self.tmpdir, "ISA", "31.03.2026")
+
+        wb_new = load_workbook(resultado)
+        ws_new = wb_new.active
+        self.assertEqual(ws_new.cell(2, 1).number_format, "mm-dd-yy")
+        self.assertEqual(
+            ws_new.cell(2, 2).number_format, "[$-F400]h:mm:ss\\ AM/PM"
+        )
+        # Las celdas sin formato específico mantienen "General"
+        self.assertEqual(ws_new.cell(1, 1).number_format, "General")
+
     def test_raises_when_source_file_missing(self):
         with self.assertRaises(FileNotFoundError) as ctx:
             generar_xlsx_poblacion(

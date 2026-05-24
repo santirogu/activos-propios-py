@@ -312,14 +312,20 @@ def subir_a_sap(root: tk.Tk, status_var: tk.StringVar, button: tk.Button) -> Non
 # ---------------------------------------------------------------------------
 
 def _generar_reporte_sox_handler(
-    dialog: tk.Toplevel,
+    root: tk.Tk,
     sociedad: str,
     fecha_desde: str,
     fecha_hasta: str,
     status_var: tk.StringVar,
     button: tk.Button,
+    btn_atras: tk.Button,
 ) -> None:
-    """Valida los inputs y lanza el worker que genera el reporte SOX."""
+    """Valida los inputs y lanza el worker que genera el reporte SOX.
+
+    El form vive en `root` (no en un Toplevel); por eso usamos `root.after`
+    para los callbacks thread-safe. Mientras el worker corre, deshabilita
+    tanto el botón Generar como el botón Atrás (no queremos que el usuario
+    vuelva al menú a mitad de un flujo SAP)."""
     try:
         from sox_report import validar_sociedad, validar_rango_fechas
     except ImportError as exc:
@@ -348,18 +354,22 @@ def _generar_reporte_sox_handler(
         return
 
     button.config(state="disabled")
+    btn_atras.config(state="disabled")
 
     def update_status(text: str) -> None:
-        dialog.after(0, status_var.set, text)
+        root.after(0, status_var.set, text)
 
     def show_info(title: str, message: str) -> None:
-        dialog.after(0, lambda: messagebox.showinfo(title, message))
+        root.after(0, lambda: messagebox.showinfo(title, message))
 
     def show_error(title: str, message: str) -> None:
-        dialog.after(0, lambda: messagebox.showerror(title, message))
+        root.after(0, lambda: messagebox.showerror(title, message))
 
     def reenable() -> None:
-        dialog.after(0, lambda: button.config(state="normal"))
+        def _do():
+            button.config(state="normal")
+            btn_atras.config(state="normal")
+        root.after(0, _do)
 
     def worker() -> None:
         with _sap_com_apartment():
@@ -399,30 +409,53 @@ def _generar_reporte_sox_handler(
     threading.Thread(target=worker, daemon=True).start()
 
 
-def control_sox(root: tk.Tk) -> tk.Toplevel:
-    """Abre el diálogo "Control SOX" con formulario (Sociedad + fechas).
+def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
+    """Reemplaza la vista del menú principal por el formulario Control SOX
+    en la misma ventana (sin abrir un Toplevel).
 
-    Devuelve la ventana `Toplevel` para que los tests puedan inspeccionarla.
+    Oculta `frame_menu` con `pack_forget` y muestra un nuevo `frame_sox` con
+    un botón "← Atrás" arriba que destruye el form SOX y re-muestra el
+    menú al ser presionado.
+
+    Devuelve el `Frame` creado para que los tests puedan inspeccionar los
+    widgets (las StringVars, los DateEntry, los botones).
     """
     from sox_report import VALID_SOCIEDADES, validar_caracter_fecha
 
-    dialog = tk.Toplevel(root)
-    dialog.title("Control SOX")
-    dialog.geometry("500x340")
-    dialog.resizable(False, False)
-    dialog.transient(root)
+    # Ocultar el menú — preservamos su estado (status_var, polling del
+    # botón Subir, etc.) para no perder progreso si el usuario vuelve.
+    frame_menu.pack_forget()
 
+    frame_sox = tk.Frame(root)
+
+    # --- Botón Atrás (esquina superior izquierda) ---
+    btn_atras = tk.Button(
+        frame_sox,
+        text="← Atrás",
+        font=("Helvetica", 9),
+        padx=8,
+        pady=2,
+    )
+    btn_atras.pack(anchor="w", padx=10, pady=(10, 0))
+
+    def volver_al_menu() -> None:
+        frame_sox.destroy()
+        frame_menu.pack(fill="both", expand=True)
+
+    btn_atras.config(command=volver_al_menu)
+
+    # --- Título ---
     tk.Label(
-        dialog, text="Control SOX", font=("Helvetica", 13, "bold")
-    ).pack(pady=(18, 4))
+        frame_sox, text="Control SOX", font=("Helvetica", 13, "bold")
+    ).pack(pady=(4, 4))
     tk.Label(
-        dialog,
+        frame_sox,
         text="Genera el Reporte SOX con los parámetros indicados",
         font=("Helvetica", 10),
         fg="#555",
     ).pack(pady=(0, 12))
 
-    form = tk.Frame(dialog)
+    form = tk.Frame(frame_sox)
     form.pack(pady=(0, 12))
 
     # --- Sociedad (Combobox readonly) ---
@@ -443,7 +476,7 @@ def control_sox(root: tk.Tk) -> tk.Toplevel:
     # DateEntry abre un popup de calendario al hacer clic en la flecha. El
     # validatecommand sigue activo: aunque el usuario escriba a mano, solo
     # se aceptan dígitos y puntos (máx 10 caracteres).
-    vcmd = (dialog.register(validar_caracter_fecha), "%P")
+    vcmd = (root.register(validar_caracter_fecha), "%P")
     fecha_hoy = datetime.now()
 
     tk.Label(form, text="Desde:", anchor="e", width=10).grid(
@@ -495,7 +528,7 @@ def control_sox(root: tk.Tk) -> tk.Toplevel:
     status_var = tk.StringVar()
 
     btn_generar = tk.Button(
-        dialog,
+        frame_sox,
         text="Generar Reporte SOX",
         font=("Helvetica", 11),
         padx=18,
@@ -503,35 +536,39 @@ def control_sox(root: tk.Tk) -> tk.Toplevel:
     )
     btn_generar.config(
         command=lambda: _generar_reporte_sox_handler(
-            dialog,
+            root,
             sociedad_var.get(),
             desde_var.get(),
             hasta_var.get(),
             status_var,
             btn_generar,
+            btn_atras,
         )
     )
     btn_generar.pack()
 
     tk.Label(
-        dialog,
+        frame_sox,
         textvariable=status_var,
         font=("Helvetica", 9),
         fg="#1a7f37",
         wraplength=460,
     ).pack(pady=(12, 0))
 
-    # Exponer widgets clave en el dialog para que los tests puedan inspeccionar.
-    dialog.sociedad_var = sociedad_var
-    dialog.desde_var = desde_var
-    dialog.hasta_var = hasta_var
-    dialog.status_var = status_var
-    dialog.sociedad_combo = sociedad_combo
-    dialog.desde_entry = desde_entry
-    dialog.hasta_entry = hasta_entry
-    dialog.btn_generar = btn_generar
+    frame_sox.pack(fill="both", expand=True)
 
-    return dialog
+    # Exponer widgets clave en el frame para que los tests puedan inspeccionar.
+    frame_sox.sociedad_var = sociedad_var
+    frame_sox.desde_var = desde_var
+    frame_sox.hasta_var = hasta_var
+    frame_sox.status_var = status_var
+    frame_sox.sociedad_combo = sociedad_combo
+    frame_sox.desde_entry = desde_entry
+    frame_sox.hasta_entry = hasta_entry
+    frame_sox.btn_generar = btn_generar
+    frame_sox.btn_atras = btn_atras
+
+    return frame_sox
 
 
 def _test_conexion_sap_handler() -> None:
@@ -568,15 +605,21 @@ def main() -> None:
     root.geometry("480x380")
     root.resizable(False, False)
 
+    # Todos los widgets del menú principal viven dentro de `frame_menu`
+    # (no directo en `root`) para que `control_sox` pueda ocultarlo con
+    # pack_forget y mostrar su propio frame en la misma ventana,
+    # preservando el estado del menú (status_var, polling, etc.).
+    frame_menu = tk.Frame(root)
+
     title = tk.Label(
-        root,
+        frame_menu,
         text="Creación de Activos Fijos en SAP",
         font=("Helvetica", 13, "bold"),
     )
     title.pack(pady=(18, 4))
 
     subtitle = tk.Label(
-        root,
+        frame_menu,
         text=f"Origen: resources/{EXCEL_PATH.name}\nDestino: salida/",
         font=("Helvetica", 10),
         fg="#555",
@@ -587,7 +630,7 @@ def main() -> None:
     status_var = tk.StringVar(value="")
 
     btn_extraer = tk.Button(
-        root,
+        frame_menu,
         text="Extraer información en txt",
         command=lambda: extraer_lsmw_a_txt(status_var),
         font=("Helvetica", 11),
@@ -598,7 +641,7 @@ def main() -> None:
     btn_extraer.pack(pady=(0, 8))
 
     btn_subir = tk.Button(
-        root,
+        frame_menu,
         text="Subir a SAP",
         font=("Helvetica", 11),
         padx=18,
@@ -610,13 +653,13 @@ def main() -> None:
     btn_subir.pack(pady=(0, 8))
 
     btn_sox = tk.Button(
-        root,
+        frame_menu,
         text="Control SOX",
         font=("Helvetica", 11),
         padx=18,
         pady=6,
         width=24,
-        command=lambda: control_sox(root),
+        command=lambda: control_sox(root, frame_menu),
     )
     btn_sox.pack(pady=(0, 12))
 
@@ -624,7 +667,7 @@ def main() -> None:
     # sin ejecutar un flujo completo. Estilo secundario (más pequeño) para
     # marcar que es una herramienta de troubleshooting, no de uso normal.
     btn_test = tk.Button(
-        root,
+        frame_menu,
         text="Test conexión SAP",
         font=("Helvetica", 9),
         fg="#555",
@@ -635,13 +678,15 @@ def main() -> None:
     btn_test.pack()
 
     status = tk.Label(
-        root,
+        frame_menu,
         textvariable=status_var,
         font=("Helvetica", 9),
         fg="#1a7f37",
         wraplength=440,
     )
     status.pack(pady=(12, 0))
+
+    frame_menu.pack(fill="both", expand=True)
 
     # Polling: habilita el botón "Subir a SAP" cuando aparezca un .txt en
     # salida/ y lo deshabilita cuando no haya. Se re-programa cada segundo.
