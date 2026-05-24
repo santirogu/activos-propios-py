@@ -22,14 +22,20 @@ from sox_report import (  # noqa: E402
     CAMPO_FECHA_DESDE,
     CAMPO_FECHA_HASTA,
     CAMPO_SOCIEDAD,
+    CREADOS_FILTRO_VALOR,
+    CREADOS_HEADERS,
+    CREADOS_SHEET_NAME,
     DOCS_GRID_SHELL,
+    PATRON_AF,
     SOX_NODE_KEY,
     STANDARD_FILE_PREFIX,
     STANDARD_SHEET_NAME,
     TREE_SHELL,
     VALID_SOCIEDADES,
+    _clasificar_ppe_intg,
     abrir_transaccion_sox,
     exportar_a_excel,
+    generar_hoja_creados,
     generar_reporte_sox,
     generar_xlsx_poblacion,
     get_sap_session,
@@ -625,6 +631,7 @@ class GenerarReporteSoxTest(unittest.TestCase):
             ingresar_parametros=make_recorder("ingresar"),
             exportar_a_excel=make_recorder("exportar"),
             generar_xlsx_poblacion=make_recorder("poblacion", fake_poblacion),
+            generar_hoja_creados=make_recorder("creados"),
         ):
             generar_reporte_sox(
                 session, "ISA", "01.05.2026", "31.05.2026",
@@ -632,7 +639,8 @@ class GenerarReporteSoxTest(unittest.TestCase):
             )
 
         self.assertEqual(
-            call_order, ["abrir", "ingresar", "exportar", "poblacion"]
+            call_order,
+            ["abrir", "ingresar", "exportar", "poblacion", "creados"],
         )
 
     def test_normalizes_sociedad_before_passing(self):
@@ -644,7 +652,8 @@ class GenerarReporteSoxTest(unittest.TestCase):
              patch(
                  "sox_report.generar_xlsx_poblacion",
                  return_value=fake_poblacion,
-             ):
+             ), \
+             patch("sox_report.generar_hoja_creados"):
             generar_reporte_sox(
                 session, "isa", "01.05.2026", "31.05.2026",
                 carpeta_destino="/tmp", nombre_archivo="x.xlsx",
@@ -665,7 +674,8 @@ class GenerarReporteSoxTest(unittest.TestCase):
              patch(
                  "sox_report.generar_xlsx_poblacion",
                  return_value=fake_poblacion,
-             ) as mock_pob:
+             ) as mock_pob, \
+             patch("sox_report.generar_hoja_creados"):
             generar_reporte_sox(
                 session, "isa", "01.05.2026", "31.05.2026",
                 carpeta_destino="/tmp", nombre_archivo="SOX_x.xlsx",
@@ -678,6 +688,25 @@ class GenerarReporteSoxTest(unittest.TestCase):
         self.assertEqual(carpeta, Path("/tmp"))
         self.assertEqual(sociedad, "ISA")
         self.assertEqual(fecha, "31.05.2026")
+
+    def test_passes_poblacion_path_to_generar_hoja_creados(self):
+        """`generar_hoja_creados` recibe el Path al archivo Población que
+        produjo el paso anterior."""
+        session = MockSAPSession()
+        fake_poblacion = Path("/anywhere/Población_ISA_31.05.2026.xlsx")
+        with patch("sox_report.abrir_transaccion_sox"), \
+             patch("sox_report.ingresar_parametros"), \
+             patch("sox_report.exportar_a_excel"), \
+             patch(
+                 "sox_report.generar_xlsx_poblacion",
+                 return_value=fake_poblacion,
+             ), \
+             patch("sox_report.generar_hoja_creados") as mock_creados:
+            generar_reporte_sox(
+                session, "ISA", "01.05.2026", "31.05.2026",
+            )
+
+        mock_creados.assert_called_once_with(fake_poblacion)
 
     def test_raises_for_invalid_sociedad(self):
         session = MockSAPSession()
@@ -704,7 +733,8 @@ class GenerarReporteSoxTest(unittest.TestCase):
              patch(
                  "sox_report.generar_xlsx_poblacion",
                  return_value=fake_poblacion,
-             ):
+             ), \
+             patch("sox_report.generar_hoja_creados"):
             carpeta, nombre = generar_reporte_sox(
                 session, "ISA", "01.05.2026", "31.05.2026",
             )
@@ -714,7 +744,8 @@ class GenerarReporteSoxTest(unittest.TestCase):
 
     def test_export_method_none_skips_poblacion_and_returns_sap_intermediate(self):
         """Si EXPORT_METHOD=None no hay archivo SAP del cual leer; se omite
-        la generación del Población_* y se devuelve el nombre intermedio."""
+        tanto el Población_* como la hoja Creados, y se devuelve el nombre
+        intermedio."""
         original_method = sox_report.EXPORT_METHOD
         sox_report.EXPORT_METHOD = None
         try:
@@ -722,13 +753,15 @@ class GenerarReporteSoxTest(unittest.TestCase):
             with patch("sox_report.abrir_transaccion_sox"), \
                  patch("sox_report.ingresar_parametros"), \
                  patch("sox_report.exportar_a_excel"), \
-                 patch("sox_report.generar_xlsx_poblacion") as mock_pob:
+                 patch("sox_report.generar_xlsx_poblacion") as mock_pob, \
+                 patch("sox_report.generar_hoja_creados") as mock_creados:
                 carpeta, nombre = generar_reporte_sox(
                     session, "ISA", "01.05.2026", "31.05.2026",
                     carpeta_destino="/tmp", nombre_archivo="SOX_x.xlsx",
                 )
 
             mock_pob.assert_not_called()
+            mock_creados.assert_not_called()
             self.assertEqual(nombre, "SOX_x.xlsx")
             self.assertEqual(carpeta, "/tmp")
         finally:
@@ -883,6 +916,379 @@ class GenerarXlsxPoblacionTest(unittest.TestCase):
         sap = self._crear_archivo_sap("SOX.xlsx", [["a"]])
         with self.assertRaises(ValueError):
             generar_xlsx_poblacion(sap, self.tmpdir, "ISA", "no-es-fecha")
+
+
+# ---------------------------------------------------------------------------
+# _clasificar_ppe_intg + PATRON_AF (helpers de generar_hoja_creados)
+# ---------------------------------------------------------------------------
+
+
+class ClasificarPpeIntgTest(unittest.TestCase):
+    """Verifica el mapeo: '19'→Intangible, '20'/'14'→Activo Construcción,
+    cualquier otro → PPE. Equivalente a la fórmula Excel IFS de la columna L."""
+
+    def test_19_is_intangible(self):
+        self.assertEqual(_clasificar_ppe_intg("19"), "Intangible")
+
+    def test_20_is_activo_construccion(self):
+        self.assertEqual(_clasificar_ppe_intg("20"), "Activo Construcción")
+
+    def test_14_is_activo_construccion(self):
+        self.assertEqual(_clasificar_ppe_intg("14"), "Activo Construcción")
+
+    def test_other_prefixes_default_to_ppe(self):
+        for prefijo in ["80", "12", "33", "01", "99", "", "abc"]:
+            with self.subTest(prefijo=prefijo):
+                self.assertEqual(_clasificar_ppe_intg(prefijo), "PPE")
+
+
+class PatronAfRegexTest(unittest.TestCase):
+    """El parseo de la columna D depende de este regex; un cambio aquí
+    propaga al resto del flujo."""
+
+    def test_parses_standard_format(self):
+        m = PATRON_AF.match("AF 8047759-0 Buje 500 kV-RV")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "8047759")
+        self.assertEqual(m.group(2), "0")
+        self.assertEqual(m.group(3), "Buje 500 kV-RV")
+
+    def test_parses_with_multiple_spaces_after_af(self):
+        """`\\s+` acepta uno o más espacios entre AF y el código."""
+        m = PATRON_AF.match("AF   2000421-0 Activo Test")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "2000421")
+
+    def test_parses_denomination_with_special_chars(self):
+        m = PATRON_AF.match("AF 1234-5 Banco de Baterías 125 Vcc #1")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(3), "Banco de Baterías 125 Vcc #1")
+
+    def test_parses_denomination_with_dashes(self):
+        """La denominación puede contener guiones (no confundir con el `-`
+        separador código-subnúmero)."""
+        m = PATRON_AF.match("AF 8047759-0 Buje 500 kV-RV")
+        self.assertEqual(m.group(3), "Buje 500 kV-RV")
+
+    def test_does_not_match_non_af_prefix(self):
+        self.assertIsNone(PATRON_AF.match("XX 8047759-0 Test"))
+        self.assertIsNone(PATRON_AF.match("Activo 8047759-0 Test"))
+
+    def test_does_not_match_when_codigo_is_not_numeric(self):
+        self.assertIsNone(PATRON_AF.match("AF abc-0 Test"))
+
+
+# ---------------------------------------------------------------------------
+# generar_hoja_creados (etapa post-Población)
+# ---------------------------------------------------------------------------
+
+
+class GenerarHojaCreadosTest(unittest.TestCase):
+    """Lee `Original_SAP` del workbook, filtra '*** creado ***', parsea
+    col D y escribe la hoja `Creados` con observaciones + headers + datos."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="test_creados_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _crear_poblacion(self, rows_original_sap, file_name="Población_x.xlsx"):
+        """Crea un workbook con la hoja `Original_SAP` y las filas dadas.
+        La primera fila es el header (8 columnas), las siguientes son datos.
+        """
+        wb = Workbook()
+        ws = wb.active
+        ws.title = STANDARD_SHEET_NAME
+        # Header
+        for col_idx, header in enumerate([
+            "Fecha", "Hora", "Usuario", "Identificación de objeto editada",
+            "Valor de objeto ampliado", "Denominación de atributo",
+            "Valor editado nuevo", "Valor editado antiguo",
+        ], start=1):
+            ws.cell(1, col_idx, header)
+        # Datos
+        for row_offset, row in enumerate(rows_original_sap, start=2):
+            for col_idx, value in enumerate(row, start=1):
+                ws.cell(row_offset, col_idx, value)
+        # number_format de Fecha y Hora en la primera fila de datos (para
+        # que generar_hoja_creados lo herede en la hoja Creados).
+        if rows_original_sap:
+            ws.cell(2, 1).number_format = "mm-dd-yy"
+            ws.cell(2, 2).number_format = "[$-F400]h:mm:ss\\ AM/PM"
+
+        ruta = self.tmpdir / file_name
+        wb.save(ruta)
+        return ruta
+
+    def test_filter_keeps_only_creado_rows(self):
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR1", "AF 1000-0 Test1", "", "Atributo", CREADOS_FILTRO_VALOR, ""],
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 14, 0).time(),
+             "USR2", "AF 2000-0 Test2", "", "Atributo", "*** modificado ***", ""],
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 15, 0).time(),
+             "USR3", "AF 3000-0 Test3", "", "Atributo", CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        stats = generar_hoja_creados(poblacion)
+
+        self.assertEqual(stats["filas_filtradas"], 2)
+        self.assertEqual(stats["filas_escritas"], 2)
+        self.assertEqual(stats["filas_descartadas"], 0)
+
+    def test_creates_creados_sheet_alongside_original_sap(self):
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR1", "AF 1000-0 Test", "", "", CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        self.assertIn(STANDARD_SHEET_NAME, wb.sheetnames)
+        self.assertIn(CREADOS_SHEET_NAME, wb.sheetnames)
+
+    def test_observations_block_in_rows_1_to_8(self):
+        poblacion = self._crear_poblacion([])
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        self.assertEqual(ws.cell(1, 1).value, "Observaciones")
+        self.assertEqual(ws.cell(3, 1).value, "1.")
+        self.assertIn("Activo fijo", ws.cell(3, 2).value)
+        self.assertEqual(ws.cell(7, 1).value, "[a]")
+        self.assertIn("-------------[a]-------------", ws.cell(8, 11).value)
+
+    def test_headers_in_row_10_are_bold(self):
+        poblacion = self._crear_poblacion([])
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        for col_idx, header in enumerate(CREADOS_HEADERS, start=1):
+            self.assertEqual(ws.cell(10, col_idx).value, header)
+            self.assertTrue(
+                ws.cell(10, col_idx).font.bold,
+                f"Header de col {col_idx} ({header}) debería estar en bold",
+            )
+
+    def test_data_starts_at_row_11(self):
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR1", "AF 1234-0 Test", "valor_amp", "atributo",
+             CREADOS_FILTRO_VALOR, "valor_ant"],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        # Fila 11 debe ser la primera (y única) fila de datos
+        self.assertEqual(ws.cell(11, 3).value, "USR1")
+        self.assertEqual(ws.cell(11, 4).value, 1234)  # Activo Fijo (int)
+        self.assertEqual(ws.cell(11, 5).value, 0)     # Subnúmero (int)
+        self.assertEqual(ws.cell(11, 6).value, "Test")  # Denominación
+        # Fila 12 vacía
+        self.assertIsNone(ws.cell(12, 3).value)
+
+    def test_parses_codigo_subnumero_denominacion(self):
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR", "AF 8047759-0 Buje 500 kV-RV", "", "",
+             CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        self.assertEqual(ws.cell(11, 4).value, 8047759)  # código int
+        self.assertEqual(ws.cell(11, 5).value, 0)        # subnúmero int
+        self.assertEqual(ws.cell(11, 6).value, "Buje 500 kV-RV")
+
+    def test_column_k_is_text_format_with_2_chars(self):
+        """K debe ser TEXTO (number_format '@') de 2 caracteres, no número."""
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR", "AF 1900000-0 Test", "", "", CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        k_cell = ws.cell(11, 11)
+        self.assertEqual(k_cell.value, "19")
+        self.assertIsInstance(k_cell.value, str)
+        self.assertEqual(k_cell.number_format, "@")
+
+    def test_column_l_classifies_19_as_intangible(self):
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR", "AF 1900000-0 Software", "", "",
+             CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        self.assertEqual(ws.cell(11, 11).value, "19")
+        self.assertEqual(ws.cell(11, 12).value, "Intangible")
+
+    def test_column_l_classifies_20_and_14_as_activo_construccion(self):
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR", "AF 2000421-0 Obra A", "", "", CREADOS_FILTRO_VALOR, ""],
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR", "AF 1400999-1 Obra B", "", "", CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        self.assertEqual(ws.cell(11, 12).value, "Activo Construcción")
+        self.assertEqual(ws.cell(12, 12).value, "Activo Construcción")
+
+    def test_column_l_default_is_ppe(self):
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR", "AF 8047759-0 Equipo", "", "",
+             CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        self.assertEqual(ws.cell(11, 12).value, "PPE")
+
+    def test_preserves_fecha_hora_number_format(self):
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR", "AF 1234-0 Test", "", "", CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        self.assertEqual(ws.cell(11, 1).number_format, "mm-dd-yy")
+        self.assertEqual(
+            ws.cell(11, 2).number_format, "[$-F400]h:mm:ss\\ AM/PM"
+        )
+
+    def test_skips_rows_that_dont_match_regex_and_counts_them(self):
+        """Filas que pasan el filtro pero col D no matchea el regex se
+        omiten del output y se cuentan en `filas_descartadas`."""
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR1", "AF 1234-0 Válido", "", "", CREADOS_FILTRO_VALOR, ""],
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR2", "FORMATO INVALIDO", "", "", CREADOS_FILTRO_VALOR, ""],
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR3", "AF sin-código-0 X", "", "", CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        stats = generar_hoja_creados(poblacion)
+
+        self.assertEqual(stats["filas_filtradas"], 3)
+        self.assertEqual(stats["filas_descartadas"], 2)
+        self.assertEqual(stats["filas_escritas"], 1)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        # Solo la fila válida llegó (fila 11)
+        self.assertEqual(ws.cell(11, 3).value, "USR1")
+        self.assertIsNone(ws.cell(12, 3).value)
+
+    def test_skips_rows_where_col_d_is_not_text(self):
+        """Si col D no es string (None, número, etc.) se descarta."""
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR1", None, "", "", CREADOS_FILTRO_VALOR, ""],
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR2", 123, "", "", CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        stats = generar_hoja_creados(poblacion)
+
+        self.assertEqual(stats["filas_filtradas"], 2)
+        self.assertEqual(stats["filas_descartadas"], 2)
+        self.assertEqual(stats["filas_escritas"], 0)
+
+    def test_filter_is_exact_match_case_sensitive(self):
+        """Variantes que no son exactamente `*** creado ***` no pasan."""
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "U", "AF 1-0 T", "", "", "*** Creado ***", ""],  # Cap C
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "U", "AF 1-0 T", "", "", " *** creado ***", ""],  # leading space
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "U", "AF 1-0 T", "", "", "creado", ""],
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "U", "AF 1-0 T", "", "", CREADOS_FILTRO_VALOR, ""],  # match
+        ]
+        poblacion = self._crear_poblacion(rows)
+        stats = generar_hoja_creados(poblacion)
+        self.assertEqual(stats["filas_filtradas"], 1)
+
+    def test_replaces_existing_creados_sheet(self):
+        """Si la hoja Creados ya existe (corrida previa), se borra y recrea."""
+        rows = [
+            [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
+             "USR1", "AF 1000-0 Primero", "", "",
+             CREADOS_FILTRO_VALOR, ""],
+        ]
+        poblacion = self._crear_poblacion(rows)
+        # Primera corrida
+        generar_hoja_creados(poblacion)
+        # Modificar fuente y re-correr
+        wb = load_workbook(poblacion)
+        ws_src = wb[STANDARD_SHEET_NAME]
+        ws_src.cell(2, 4, "AF 9999-0 Segundo")
+        wb.save(poblacion)
+        # Segunda corrida
+        generar_hoja_creados(poblacion)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        # Solo debe quedar el "Segundo" (no duplicarse con el "Primero")
+        self.assertEqual(ws.cell(11, 6).value, "Segundo")
+        self.assertIsNone(ws.cell(12, 6).value)
+
+    def test_raises_value_error_when_original_sap_sheet_missing(self):
+        # Workbook sin Original_SAP
+        wb = Workbook()
+        wb.active.title = "OtraHoja"
+        ruta = self.tmpdir / "sin_original.xlsx"
+        wb.save(ruta)
+
+        with self.assertRaises(ValueError) as ctx:
+            generar_hoja_creados(ruta)
+        self.assertIn(STANDARD_SHEET_NAME, str(ctx.exception))
+
+    def test_raises_file_not_found_when_file_missing(self):
+        with self.assertRaises(FileNotFoundError):
+            generar_hoja_creados(self.tmpdir / "no_existe.xlsx")
+
+    def test_empty_source_produces_only_observations_and_headers(self):
+        """Sin filas en Original_SAP, Creados igual tiene observaciones +
+        headers; stats reporta 0 filas en todos los conteos."""
+        poblacion = self._crear_poblacion([])
+        stats = generar_hoja_creados(poblacion)
+
+        self.assertEqual(stats["filas_filtradas"], 0)
+        self.assertEqual(stats["filas_escritas"], 0)
+
+        wb = load_workbook(poblacion)
+        ws = wb[CREADOS_SHEET_NAME]
+        self.assertEqual(ws.cell(1, 1).value, "Observaciones")
+        self.assertEqual(ws.cell(10, 1).value, "Fecha")
+        self.assertIsNone(ws.cell(11, 1).value)
 
 
 # ---------------------------------------------------------------------------

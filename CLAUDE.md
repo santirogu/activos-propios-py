@@ -140,8 +140,9 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 - `EXPORT_METHOD = "alv_grid"` (default) — usa `&MB_EXPORT > &XXL` sobre `DOCS_GRID_SHELL`. Confirmado por `resources/Script2sox.vbs` para AR15 (que muestra un ALV grid, no lista clásica). Alternativas: `"pc_list"` (usa `%PC`, sólo aplica a listas clásicas — NO funciona en AR15) o `None` (deja al usuario guardar manualmente y omite el paso 5).
 - `ALV_SAVE_DIALOG_OK_BTN = "btn[11]"` — el diálogo de save abierto por `&XXL` en AR15 confirma con `btn[11]` (Generar/Reemplazar). `btn[0]` no existe en ese diálogo y fue el origen del error `"The control could not be found by id"` cuando el default era `pc_list`. `_rellenar_save_dialog(..., boton_ok_id=...)` permite parametrizar cuál botón presionar.
 - `STANDARD_FILE_PREFIX = "Población"` y `STANDARD_SHEET_NAME = "Original_SAP"` — usados por `generar_xlsx_poblacion` para nombrar el archivo final y la hoja interna. Patrón: `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx`.
+- `CREADOS_SHEET_NAME = "Creados"`, `CREADOS_FILTRO_VALOR = "*** creado ***"`, `PATRON_AF = re.compile(r"^AF\s+(\d+)-(\d+)\s+(.+)$")`, `CREADOS_HEADERS`, `CREADOS_OBSERVACIONES`, `CREADOS_CLASIFICACION` — usados por `generar_hoja_creados` para producir la segunda hoja del Población. `CREADOS_CLASIFICACION = {"19": "Intangible", "20": "Activo Construcción", "14": "Activo Construcción"}` (cualquier otro prefijo → PPE).
 
-### Mapeo del flujo (5 pasos)
+### Mapeo del flujo (6 pasos)
 
 | # | Función | Acciones SAP / Python |
 |---|---|---|
@@ -151,14 +152,17 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 | 2c | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH |
 | 3 | `ingresar_parametros` | F8 (ejecuta el reporte) |
 | 4 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) o `_exportar_via_pc_list` | ALV: `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `_rellenar_save_dialog(..., boton_ok_id="btn[11]")`. PC: `%PC` + manejo de variantes A/B/C del save-as + `_rellenar_save_dialog(..., boton_ok_id="btn[0]")`. Produce `SOX_{SOC}_{YYYYMMDD_HHMMSS}.xlsx` intermedio. |
-| 5 | `generar_xlsx_poblacion` (post-SAP, pure Python) | Lee el intermedio con openpyxl, copia su contenido (celda por celda, preservando `number_format` para que Fecha y Hora se vean como en SAP) a una nueva hoja `Original_SAP` y guarda como `Población_{SOC}_{FECHA_HASTA}.xlsx`. Es el **deliverable final** que devuelve `generar_reporte_sox`. Si `EXPORT_METHOD=None`, este paso se omite. |
+| 5 | `generar_xlsx_poblacion` (post-SAP, pure Python) | Lee el intermedio con openpyxl, copia su contenido (celda por celda, preservando `number_format` para que Fecha y Hora se vean como en SAP) a una nueva hoja `Original_SAP` y guarda como `Población_{SOC}_{FECHA_HASTA}.xlsx`. Si `EXPORT_METHOD=None`, este paso se omite. |
+| 6 | `generar_hoja_creados(poblacion)` (post-procesamiento, pure Python) | Abre el Población, lee `Original_SAP`, filtra filas con G == `*** creado ***`, parsea la columna D con `PATRON_AF` (formato `"AF <code>-<sub> <denom>"`) y produce una **segunda hoja `Creados`** con: filas 1-9 = bloque de observaciones (textos fijos del cliente), fila 10 = headers en bold, filas 11+ = datos con código/subnúmero como ints, denominación como texto, columna K = primeros 2 dígitos del código en `number_format="@"` (texto, preserva ceros a la izquierda), columna L = clasificación PPE/Intangible/Activo Construcción. Filas que pasan el filtro pero la col D no matchea el regex se loguean y omiten (no rompen el flujo). Es el **deliverable final** que devuelve `generar_reporte_sox`. |
 
 ### Helpers
 - `validar_sociedad` / `validar_fecha` / `validar_rango_fechas` / `validar_caracter_fecha` — validaciones puras, testeables sin SAP.
 - `_intentar_listar_nodos_arbol(tree)` — diagnóstico: enumera nodos del árbol SAP (`GetAllNodeKeys` + `GetNodeTextByKey`) cuando falla `doubleClickNode`. Mensaje de error sugiere descubrir la T-code real vía "Sistema → Estado".
 - Salida: dos archivos en `salida/`:
   - **Intermedio:** `SOX_{SOCIEDAD}_{YYYYMMDD_HHMMSS}.xlsx` (lo que SAP exportó).
-  - **Final / deliverable:** `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx` (con el contenido del intermedio en la hoja `Original_SAP`). El handler GUI muestra este nombre al usuario.
+  - **Final / deliverable:** `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx` con **dos hojas**:
+    - `Original_SAP`: copia 1:1 del intermedio (preserva `number_format`).
+    - `Creados`: filas de `Original_SAP` filtradas por `G == "*** creado ***"`, con código/subnúmero/denominación parseados de la col D, + columnas K (prefijo del código como texto) y L (clasificación PPE/Intangible/Activo Construcción). Bloque de observaciones en filas 1-9. El handler GUI muestra este nombre al usuario.
 
 ### CLI
 ```bash
@@ -188,7 +192,7 @@ Exit codes: 0 OK, 1 error (validación o SAP), 2 uso incorrecto.
 
 ### Distribución
 - `tests/test_main.py` (75): handlers GUI, extracción TSV, vista SOX como frame embebido (`ControlSoxDialogTest` verifica el ocultado del menú, exposición del botón Atrás, y reversión al menú; `GenerarReporteSoxHandlerTest` verifica que ambos botones Generar+Atrás se deshabilitan durante el worker).
-- `tests/test_sox_report.py` (72): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso post-SAP que produce el `Población_*.xlsx`, incluye preservación de `number_format` por celda) + `GenerarReporteSoxTest` (incluye verificación de que el orquestador pasa sociedad normalizada y fecha_hasta al paso Población, y que `EXPORT_METHOD=None` salta ese paso).
+- `tests/test_sox_report.py` (101): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso Población) + `ClasificarPpeIntgTest` + `PatronAfRegexTest` (6 tests del parseo de col D) + `GenerarHojaCreadosTest` (16 tests del paso post-procesamiento: filter, parsing, estructura, replace idempotente, errores) + `GenerarReporteSoxTest` (verifica orden de los 6 pasos, paso a las funciones, `EXPORT_METHOD=None` salta tanto Población como Creados).
 - `tests/test_sap_upload.py` (46): cada paso del flujo LSMW + `MainEntryPointTest`.
 
 ### Cómo ejecutar
@@ -245,3 +249,7 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 - **openpyxl no preserva strings vacías en round-trip** — guarda celda vacía → lee `None`. Para el reporte SOX esto es funcionalmente equivalente; los tests usan datos sin strings vacías para evitar la confusión.
 - **`generar_xlsx_poblacion` copia celda por celda (no `iter_rows(values_only=True)`)** — para preservar `number_format`. SAP usa `'mm-dd-yy'` para Fecha y `'[$-F400]h:mm:ss\ AM/PM'` para Hora; sin esto el usuario veía `2026-03-02 0:00:00` y `13:00:49` (defaults de openpyxl) en vez del formato corto + AM/PM del original SAP. Solo se copia `value` y `number_format`, no estilos completos (font/fill/border) — el archivo Población es más liviano y la única diferencia visual relevante eran las columnas de tiempo.
 - **Control SOX usa frame switching, no Toplevel** — `main()` empaca todos los widgets del menú en `frame_menu`. `control_sox(root, frame_menu)` hace `pack_forget` del menú y muestra `frame_sox` en `root`; el botón "← Atrás" destruye `frame_sox` y re-empaca `frame_menu`. Razón: UX más fluida (una sola ventana, sin saltos de focus a un Toplevel). Las StringVars/widgets del menú se preservan porque sólo se oculta el frame, no se destruye — el polling del botón "Subir a SAP" sigue activo incluso mientras el usuario está en el form SOX.
+- **`generar_hoja_creados` se ejecuta en el mismo workbook (no produce un archivo nuevo)** — añade la hoja `Creados` al `Población_*.xlsx` y guarda sobre sí mismo. Idempotente: si la hoja ya existe, se borra y recrea (no se hace append). Esto mantiene un solo deliverable para el usuario; no hay que coordinar dos archivos.
+- **Filas que no matchean el regex se loguean y omiten, no rompen el flujo** — `PATRON_AF` puede fallar si SAP genera un texto inesperado en col D (raro pero posible). En vez de abortar todo el reporte, se cuentan en `filas_descartadas` y se loguean con el texto crudo para que el usuario pueda investigar. El conteo `filas_filtradas` vs `filas_escritas` permite detectar discrepancias.
+- **Columna K en `Creados` es texto (`number_format="@"`), no número** — los primeros 2 dígitos del código (ej. "19", "20", "08") deben quedar como string para (a) preservar ceros a la izquierda si existen, y (b) permitir comparación con strings literales en la fórmula de clasificación de la columna L. Si openpyxl lo guardara como número, "08" se convertiría a 8 y la clasificación fallaría.
+- **`generar_hoja_creados` usa openpyxl puro (no pandas)** — para no añadir una dependencia pesada (~50 MB) por una sola función. Para 500k filas en normal mode toma ~30-60 segundos pero es aceptable como paso síncrono del worker. Si la performance se vuelve un problema, evaluar `read_only=True` para la lectura + dos pasadas (read en read_only, write en normal); o añadir pandas como dependencia opcional.

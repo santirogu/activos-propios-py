@@ -36,12 +36,14 @@ También se puede invocar desde la GUI vía el botón "Control SOX" de
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SALIDA_DIR = PROJECT_ROOT / "salida"
@@ -51,6 +53,59 @@ SALIDA_DIR = PROJECT_ROOT / "salida"
 # Ej: Población_ISA_31.03.2026.xlsx
 STANDARD_FILE_PREFIX = "Población"
 STANDARD_SHEET_NAME = "Original_SAP"
+
+# Segunda hoja del Población — generada filtrando filas "*** creado ***" de
+# Original_SAP y parseando la columna D (formato "AF <code>-<sub> <denom>").
+CREADOS_SHEET_NAME = "Creados"
+CREADOS_FILTRO_VALOR = "*** creado ***"
+
+# Regex que parsea la columna D ("Identificación de objeto editada") de SAP.
+# Formato: "AF" + uno o más espacios + código numérico + "-" + subnúmero
+# numérico + uno o más espacios + denominación (texto libre con espacios).
+# Ej: "AF 8047759-0 Buje 500 kV-RV" → ("8047759", "0", "Buje 500 kV-RV").
+PATRON_AF = re.compile(r"^AF\s+(\d+)-(\d+)\s+(.+)$")
+
+# Headers de la hoja Creados, en orden. Se escriben en la fila 10.
+CREADOS_HEADERS = (
+    "Fecha", "Hora", "Usuario", "Activo Fijo", "Subnúmero",
+    "Identificación de objeto editada", "Valor de objeto ampliado",
+    "Denominación de atributo", "Valor editado nuevo",
+    "Valor editado antiguo", "Extrae", "PPE o Intg",
+)
+
+# Bloque de observaciones (filas 1-9) que va encima de los datos en la hoja
+# Creados. Lista de (fila, columna, texto) — celdas no listadas quedan vacías.
+CREADOS_OBSERVACIONES = (
+    (1, 1, "Observaciones"),
+    (3, 1, "1."),
+    (3, 2, "En la Columna D se separa su codigo de Activo fijo, su subnúmero y "
+           "su nombre con el fin de realizar la busqueda de los activos fijo "
+           "por su codigo."),
+    (4, 1, "2."),
+    (4, 2, "Los activos fijos de PPE se pueden identificar con sus números "
+           "iniciales, los cuales comienzan diferente al número 19. Con el "
+           "número 19 comienzan los activos intangibles, identificados en las "
+           "columnas [a]."),
+    (5, 1, "3."),
+    (5, 2, "También se identifican los activos en construcción en las columnas "
+           "añadidas [a]"),
+    (6, 1, "4."),
+    (6, 2, "De la columna \"Valor editado nuevo\" se toman los activos con "
+           "concepto \"Creado\""),
+    (7, 1, "[a]"),
+    (7, 2, "Se añade la columna K en la cual se extrae los dos primeros codigos "
+           "de cada activo, para en la columna L la cual también se insertó "
+           "para identificar que tipo de activo fijo es."),
+    (8, 11, "-------------[a]-------------"),
+)
+
+# Mapping de prefijos (primeros 2 dígitos del código) a categoría.
+# Cualquier prefijo no listado cae en "PPE".
+CREADOS_CLASIFICACION = {
+    "19": "Intangible",
+    "20": "Activo Construcción",
+    "14": "Activo Construcción",
+}
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -682,6 +737,178 @@ def generar_xlsx_poblacion(
     return ruta_destino
 
 
+def _clasificar_ppe_intg(prefijo_codigo: str) -> str:
+    """Devuelve la categoría según los primeros 2 dígitos del código del
+    activo: '19'→Intangible, '20'/'14'→Activo Construcción, resto→PPE.
+
+    Equivalente Excel:
+        =IFS(K{n}="19","Intangible", K{n}="20","Activo Construcción",
+             K{n}="14","Activo Construcción", TRUE,"PPE")
+    """
+    return CREADOS_CLASIFICACION.get(prefijo_codigo, "PPE")
+
+
+def generar_hoja_creados(archivo_poblacion: Path) -> dict[str, int]:
+    """Añade (o reemplaza) la hoja `Creados` al workbook Población.
+
+    Lee la hoja `Original_SAP`, filtra las filas donde la columna G es
+    exactamente `*** creado ***`, parsea la columna D con `PATRON_AF` para
+    extraer (código, subnúmero, denominación), y escribe el resultado en
+    una hoja `Creados` con la estructura:
+
+      - Filas 1-9: bloque de observaciones (textos explicativos).
+      - Fila 10: headers en negrita.
+      - Filas 11+: datos. Columnas A-B preservan `number_format` de Fecha
+        y Hora del original (para que se vean iguales). Columna K (primeros
+        2 dígitos del código) se escribe como texto (`number_format = "@"`)
+        para preservar ceros a la izquierda. Columna L = clasificación.
+
+    Si la hoja `Creados` ya existe, se borra y recrea. El archivo se
+    guarda sobre sí mismo.
+
+    Args:
+        archivo_poblacion: ruta al .xlsx Población que tiene Original_SAP.
+
+    Returns:
+        Dict con stats:
+          - filas_filtradas: cuántas filas matchearon el filtro.
+          - filas_escritas: cuántas filas se escribieron en Creados
+            (= filtradas - descartadas por regex inválida).
+          - filas_descartadas: cuántas pasaron filtro pero la col D no
+            matcheó `PATRON_AF` (se omiten y se loguean).
+
+    Raises:
+        FileNotFoundError: si el archivo no existe.
+        ValueError: si el workbook no tiene la hoja `Original_SAP`.
+    """
+    if not archivo_poblacion.exists():
+        raise FileNotFoundError(
+            f"No existe el archivo Población: {archivo_poblacion}"
+        )
+
+    _log(f"Generando hoja '{CREADOS_SHEET_NAME}' en {archivo_poblacion.name}...")
+    wb = load_workbook(archivo_poblacion)
+
+    if STANDARD_SHEET_NAME not in wb.sheetnames:
+        raise ValueError(
+            f"El workbook {archivo_poblacion.name} no tiene la hoja "
+            f"'{STANDARD_SHEET_NAME}'. ¿Es un archivo Población_* válido?"
+        )
+
+    ws_src = wb[STANDARD_SHEET_NAME]
+
+    # Tomar el number_format de Fecha y Hora de la primera fila de datos
+    # del original para replicarlo en Creados (mantiene la apariencia).
+    if ws_src.max_row >= 2:
+        fecha_nf = ws_src.cell(2, 1).number_format
+        hora_nf = ws_src.cell(2, 2).number_format
+    else:
+        fecha_nf = "mm-dd-yy"
+        hora_nf = "[$-F400]h:mm:ss\\ AM/PM"
+
+    # Filtrar + parsear en una sola pasada para no duplicar memoria.
+    filas_filtradas = 0
+    filas_descartadas = 0
+    filas_para_escribir: list[tuple] = []
+
+    for row in ws_src.iter_rows(min_row=2, values_only=True):
+        # Skip filas con menos de 8 columnas (datos truncados / vacíos).
+        if len(row) < 8:
+            continue
+
+        col_g = row[6]
+        if col_g != CREADOS_FILTRO_VALOR:
+            continue
+        filas_filtradas += 1
+
+        col_d = row[3]
+        if not isinstance(col_d, str):
+            filas_descartadas += 1
+            _log(
+                f"  Fila descartada (col D no es texto): {col_d!r}"
+            )
+            continue
+
+        match = PATRON_AF.match(col_d)
+        if not match:
+            filas_descartadas += 1
+            _log(
+                f"  Fila descartada (col D no matchea regex): {col_d!r}"
+            )
+            continue
+
+        codigo = int(match.group(1))
+        subnumero = int(match.group(2))
+        denominacion = match.group(3)
+
+        filas_para_escribir.append((
+            row[0],         # A: Fecha
+            row[1],         # B: Hora
+            row[2],         # C: Usuario
+            codigo,         # D: Activo Fijo (int)
+            subnumero,      # E: Subnúmero (int)
+            denominacion,   # F: Denominación
+            row[4],         # G: Valor de objeto ampliado
+            row[5],         # H: Denominación de atributo
+            row[6],         # I: Valor editado nuevo (siempre "*** creado ***")
+            row[7],         # J: Valor editado antiguo
+        ))
+
+    # Recrear la hoja desde cero (idempotente).
+    if CREADOS_SHEET_NAME in wb.sheetnames:
+        del wb[CREADOS_SHEET_NAME]
+    ws_dst = wb.create_sheet(CREADOS_SHEET_NAME)
+
+    # Bloque de observaciones (filas 1-9).
+    for fila, columna, texto in CREADOS_OBSERVACIONES:
+        ws_dst.cell(fila, columna, texto)
+
+    # Headers en fila 10 (negrita).
+    bold = Font(bold=True)
+    for col_idx, header in enumerate(CREADOS_HEADERS, start=1):
+        cell = ws_dst.cell(10, col_idx, header)
+        cell.font = bold
+
+    # Datos desde fila 11.
+    for offset, datos in enumerate(filas_para_escribir):
+        fila_excel = 11 + offset
+        ws_dst.cell(fila_excel, 1, datos[0]).number_format = fecha_nf
+        ws_dst.cell(fila_excel, 2, datos[1]).number_format = hora_nf
+        ws_dst.cell(fila_excel, 3, datos[2])
+        ws_dst.cell(fila_excel, 4, datos[3])
+        ws_dst.cell(fila_excel, 5, datos[4])
+        ws_dst.cell(fila_excel, 6, datos[5])
+        ws_dst.cell(fila_excel, 7, datos[6])
+        ws_dst.cell(fila_excel, 8, datos[7])
+        ws_dst.cell(fila_excel, 9, datos[8])
+        ws_dst.cell(fila_excel, 10, datos[9])
+
+        # K: primeros 2 caracteres del código, como texto (preserva ceros
+        # a la izquierda y permite que la fórmula de clasificación los
+        # compare como strings).
+        codigo_str = str(datos[3])
+        k_value = codigo_str[:2]
+        cell_k = ws_dst.cell(fila_excel, 11, k_value)
+        cell_k.number_format = "@"
+
+        # L: clasificación según K.
+        ws_dst.cell(fila_excel, 12, _clasificar_ppe_intg(k_value))
+
+    wb.save(archivo_poblacion)
+
+    filas_escritas = len(filas_para_escribir)
+    _log(
+        f"Hoja '{CREADOS_SHEET_NAME}' generada: {filas_escritas} filas escritas "
+        f"({filas_filtradas} matchearon filtro, "
+        f"{filas_descartadas} descartadas por regex)."
+    )
+    return {
+        "filas_filtradas": filas_filtradas,
+        "filas_escritas": filas_escritas,
+        "filas_descartadas": filas_descartadas,
+    }
+
+
 def generar_reporte_sox(
     session,
     sociedad: str,
@@ -747,6 +974,10 @@ def generar_reporte_sox(
         sociedad_norm,
         fecha_hasta,
     )
+
+    # Etapa post-procesamiento: añadir la hoja 'Creados' al mismo workbook,
+    # con las filas filtradas de Original_SAP y los códigos parseados.
+    generar_hoja_creados(archivo_poblacion)
 
     duracion = time.monotonic() - inicio
     _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
