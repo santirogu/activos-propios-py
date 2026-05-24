@@ -135,7 +135,8 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 - `CALENDAR_SHELL = "wnd[1]/usr/cntlCONTAINER/shellcont/shell"` — calendario emergente F4.
 - `DATE_FORMAT_USER = "%d.%m.%Y"` (formulario) y `DATE_FORMAT_SAP_CALENDAR = "%Y%m%d"` (calendario SAP).
 - Campos: `CAMPO_SOCIEDAD = "wnd[0]/usr/ctxtP_BUKRS"`, `CAMPO_FECHA_DESDE = "wnd[0]/usr/ctxtS_DATUM-LOW"`, `CAMPO_FECHA_HASTA = "wnd[0]/usr/ctxtS_DATUM-HIGH"`.
-- `EXPORT_METHOD = "pc_list"` (default) — usa `%PC` (System > List > Save > File). Funciona con listas SAP clásicas como AR15. Alternativas: `"alv_grid"` (usa `&MB_EXPORT > &XXL` sobre `DOCS_GRID_SHELL` del recording original — no aplica a AR15) o `None` (no exporta, deja al usuario guardar manualmente).
+- `EXPORT_METHOD = "alv_grid"` (default) — usa `&MB_EXPORT > &XXL` sobre `DOCS_GRID_SHELL`. Confirmado por `resources/Script2sox.vbs` para AR15 (que muestra un ALV grid, no lista clásica). Alternativas: `"pc_list"` (usa `%PC`, sólo aplica a listas clásicas — NO funciona en AR15) o `None` (deja al usuario guardar manualmente).
+- `ALV_SAVE_DIALOG_OK_BTN = "btn[11]"` — el diálogo de save abierto por `&XXL` en AR15 confirma con `btn[11]` (Generar/Reemplazar). `btn[0]` no existe en ese diálogo y fue el origen del error `"The control could not be found by id"` cuando el default era `pc_list`. `_rellenar_save_dialog(..., boton_ok_id=...)` permite parametrizar cuál botón presionar.
 
 ### Mapeo del flujo (4 pasos)
 
@@ -146,7 +147,7 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 | 2b | `_seleccionar_fecha_calendario` (Desde) | foco campo + caretPosition 0 + F4 → calendar.focusDate / selectionInterval con `yyyymmdd` |
 | 2c | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH |
 | 3 | `ingresar_parametros` | F8 (ejecuta el reporte) |
-| 4 | `exportar_a_excel` → `_exportar_via_pc_list` o `_exportar_via_alv_grid` | `%PC` + manejo de variantes A/B/C del save-as (estructura del diálogo varía entre versiones SAP); `_rellenar_save_dialog` llena DY_PATH/DY_FILENAME + OK |
+| 4 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) o `_exportar_via_pc_list` | ALV: `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `_rellenar_save_dialog(..., boton_ok_id="btn[11]")`. PC: `%PC` + manejo de variantes A/B/C del save-as + `_rellenar_save_dialog(..., boton_ok_id="btn[0]")` |
 
 ### Helpers
 - `validar_sociedad` / `validar_fecha` / `validar_rango_fechas` / `validar_caracter_fecha` — validaciones puras, testeables sin SAP.

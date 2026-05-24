@@ -353,9 +353,9 @@ class IngresarParametrosTest(unittest.TestCase):
 
 
 class ExportarAExcelTest(unittest.TestCase):
-    """El método default es 'pc_list' (System > List > Save > File via %PC),
-    que funciona con listas SAP clásicas como AR15. Tests específicos de
-    'alv_grid' patchean EXPORT_METHOD."""
+    """El método default es 'alv_grid' (&MB_EXPORT > &XXL sobre el grid),
+    confirmado por `resources/Script2sox.vbs` para AR15. El modo 'pc_list'
+    (%PC) sigue disponible para listas SAP clásicas, pero AR15 NO es una."""
 
     def setUp(self):
         self._method_original = sox_report.EXPORT_METHOD
@@ -451,6 +451,31 @@ class ExportarAExcelTest(unittest.TestCase):
         )
         self.assertEqual(
             session._elements["wnd[1]/usr/ctxtDY_FILENAME"].text, "x.xlsx"
+        )
+
+    def test_alv_grid_presses_btn11_to_confirm_save(self):
+        """El diálogo de save abierto por &XXL en AR15 confirma con btn[11]
+        (no btn[0]). btn[0] no existe en ese diálogo — fue la causa del
+        error 'The control could not be found by id' antes del fix."""
+        sox_report.EXPORT_METHOD = "alv_grid"
+        session = MockSAPSession()
+        exportar_a_excel(session, r"C:\salida", "x.xlsx")
+
+        self.assertIn(
+            ("wnd[1]/tbar[0]/btn[11]", "press"), session.actions
+        )
+        self.assertNotIn(
+            ("wnd[1]/tbar[0]/btn[0]", "press"), session.actions
+        )
+
+    def test_pc_list_presses_btn0_to_confirm_save(self):
+        """El diálogo de save abierto por %PC sí usa btn[0]."""
+        sox_report.EXPORT_METHOD = "pc_list"
+        session = MockSAPSession()
+        exportar_a_excel(session, r"C:\salida", "x.xlsx")
+
+        self.assertIn(
+            ("wnd[1]/tbar[0]/btn[0]", "press"), session.actions
         )
 
     def test_none_method_skips_export(self):
@@ -556,6 +581,7 @@ class StepErrorContextTest(unittest.TestCase):
             ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
 
     def test_exportar_raises_when_grid_not_found_in_alv_mode(self):
+        original_method = sox_report.EXPORT_METHOD
         sox_report.EXPORT_METHOD = "alv_grid"
         try:
             session = MockSAPSession()
@@ -571,7 +597,7 @@ class StepErrorContextTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "grid de resultados"):
                 exportar_a_excel(session, r"C:\salida", "x.xlsx")
         finally:
-            sox_report.EXPORT_METHOD = "pc_list"
+            sox_report.EXPORT_METHOD = original_method
 
 
 class GenerarReporteSoxTest(unittest.TestCase):

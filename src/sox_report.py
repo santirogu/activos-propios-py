@@ -86,23 +86,28 @@ CAMPO_SOCIEDAD = "wnd[0]/usr/ctxtP_BUKRS"
 CAMPO_FECHA_DESDE = "wnd[0]/usr/ctxtS_DATUM-LOW"
 CAMPO_FECHA_HASTA = "wnd[0]/usr/ctxtS_DATUM-HIGH"
 
-# Shell del grid de resultados (sólo aplica al método "alv_grid").
-# Este path viene del recording original (Scriptsox.vbs) — no aplica a
-# AR15. Si en algún momento se necesita exportar desde un ALV grid con
-# este método, ajustar este ID.
+# Shell del grid de resultados de AR15. Confirmado por
+# `resources/Script2sox.vbs` (recording vigente). Si en otra instalación
+# el ID es diferente, re-grabar y actualizar este valor.
 DOCS_GRID_SHELL = (
     "wnd[0]/usr/subDISPLAY:SAPLBANK_OBJ_CHDOC:0210/"
     "cntlCC_CHANGE_DOCUMENTS_SURVAY/shellcont/shell/shellcont[1]/shell"
 )
 
+# Botón del diálogo "Save List in File" que abre &XXL en el ALV grid de
+# AR15. El recording usa btn[11] (Generar/Reemplazar); el btn[0] del
+# diálogo común de %PC no existe en este diálogo, por eso era el origen
+# del error "The control could not be found by id" antes del fix.
+ALV_SAVE_DIALOG_OK_BTN = "btn[11]"
+
 # Método de exportación a archivo:
-#   "pc_list"  → usa la T-code %PC (System > List > Save > File). Funciona
-#                con listas SAP clásicas como AR15. Es el default actual.
-#   "alv_grid" → método del recording original (&MB_EXPORT > &XXL sobre el
-#                grid). Sólo aplica a ALV grids específicos.
+#   "alv_grid" → &MB_EXPORT > &XXL sobre el grid. Default — es lo que usa
+#                AR15 (ALV grid, no lista clásica).
+#   "pc_list"  → usa la T-code %PC (System > List > Save > File). Sólo
+#                aplica a listas SAP clásicas (AR15 NO lo es).
 #   None       → no exporta. Deja el reporte abierto en SAP y el usuario
 #                guarda manualmente.
-EXPORT_METHOD: str | None = "pc_list"
+EXPORT_METHOD: str | None = "alv_grid"
 
 
 # ---------------------------------------------------------------------------
@@ -421,10 +426,19 @@ def ingresar_parametros(
 
 
 def _rellenar_save_dialog(
-    session, carpeta_destino: str, nombre_archivo: str
+    session,
+    carpeta_destino: str,
+    nombre_archivo: str,
+    boton_ok_id: str = "btn[0]",
 ) -> None:
-    """Llena el diálogo estándar de SAP "Save File" (DY_PATH + DY_FILENAME)
-    y presiona OK. Usado por ambos métodos de exportación."""
+    """Llena el diálogo de SAP "Save File" (DY_PATH + DY_FILENAME) y pulsa
+    el botón de confirmación.
+
+    El ID del botón varía según el diálogo:
+      - %PC abre el diálogo "Save List in File" con OK en btn[0].
+      - &XXL del ALV grid abre un diálogo similar pero con OK en btn[11]
+        (Generar/Reemplazar); btn[0] no existe en ese diálogo.
+    """
     path_field = _ejecutar(
         "Localizar campo de ruta (wnd[1]/usr/ctxtDY_PATH)",
         session.findById, "wnd[1]/usr/ctxtDY_PATH",
@@ -447,11 +461,12 @@ def _rellenar_save_dialog(
         lambda: setattr(nombre_field, "caretPosition", len(nombre_archivo)),
     )
 
+    boton_id_completo = f"wnd[1]/tbar[0]/{boton_ok_id}"
     boton_ok = _ejecutar(
-        "Localizar botón OK del diálogo (wnd[1]/tbar[0]/btn[0])",
-        session.findById, "wnd[1]/tbar[0]/btn[0]",
+        f"Localizar botón OK del diálogo ({boton_id_completo})",
+        session.findById, boton_id_completo,
     )
-    _ejecutar("Pulsar OK para guardar", boton_ok.press)
+    _ejecutar(f"Pulsar OK ({boton_ok_id}) para guardar", boton_ok.press)
 
 
 def _exportar_via_pc_list(
@@ -515,8 +530,8 @@ def _exportar_via_alv_grid(
     session, carpeta_destino: str, nombre_archivo: str
 ) -> None:
     """Exporta usando el menú contextual del ALV grid (&MB_EXPORT > &XXL).
-    Sólo funciona si el grid tiene el shell ID configurado en
-    DOCS_GRID_SHELL (no aplica a AR15)."""
+    Replica `resources/Script2sox.vbs` para AR15 — usa DOCS_GRID_SHELL y
+    cierra el diálogo de save con `ALV_SAVE_DIALOG_OK_BTN` (btn[11])."""
     _log("  Modo ALV grid: usando &MB_EXPORT + &XXL...")
     grid = _ejecutar(
         f"Localizar grid de resultados ({DOCS_GRID_SHELL})",
@@ -530,7 +545,12 @@ def _exportar_via_alv_grid(
         "Seleccionar exportación a Excel (&XXL)",
         grid.selectContextMenuItem, "&XXL",
     )
-    _rellenar_save_dialog(session, carpeta_destino, nombre_archivo)
+    _rellenar_save_dialog(
+        session,
+        carpeta_destino,
+        nombre_archivo,
+        boton_ok_id=ALV_SAVE_DIALOG_OK_BTN,
+    )
     _log(f"Archivo guardado en: {carpeta_destino}\\{nombre_archivo}")
 
 
