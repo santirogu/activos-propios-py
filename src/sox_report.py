@@ -97,6 +97,13 @@ IPE_SCREENSHOTS_INFO = (
 # .xlsx; escalarlas mantiene el archivo manejable sin perder legibilidad.
 IPE_IMAGE_MAX_WIDTH = 1200
 
+# Títulos de ventanas de la app Tkinter que se deben minimizar antes de
+# capturar pantalla, para que las screenshots IPE muestren SAP limpio sin
+# la UI de "Creación Activos SAP" encima. El título debe coincidir con
+# `root.title(...)` en `src/main.py`. Si en el futuro se renombra la
+# ventana, actualizar aquí también.
+TITULOS_VENTANA_APP = ("Creación Activos SAP",)
+
 # Bloque de observaciones (filas 1-9) que va encima de los datos en la hoja
 # Creados. Lista de (fila, columna, texto) — celdas no listadas quedan vacías.
 CREADOS_OBSERVACIONES = (
@@ -771,38 +778,206 @@ def generar_xlsx_poblacion(
 # por una evidencia fallida — el archivo IPE simplemente reportará qué
 # capturas faltaron.
 
+# Lista módulo-level de HWNDs minimizados durante el flujo de capturas
+# IPE, para que `_restaurar_ventanas_app` los pueda volver a mostrar al
+# final. Se popula en `_minimizar_ventanas_app` y se vacía en
+# `_restaurar_ventanas_app`. Compartida por toda la corrida de
+# `generar_reporte_sox`.
+_VENTANAS_MINIMIZADAS_PARA_CAPTURA: list[int] = []
+
+
+def _minimizar_ventanas_app() -> None:
+    """Minimiza las ventanas de la app Tkinter (títulos en
+    `TITULOS_VENTANA_APP`) para que las capturas IPE no incluyan la UI.
+
+    Trackea los HWNDs minimizados en `_VENTANAS_MINIMIZADAS_PARA_CAPTURA`
+    para que `_restaurar_ventanas_app` pueda revertir al final. Idempotente:
+    si una ventana ya está minimizada (IsIconic), no la toca (preserva la
+    intención del usuario).
+
+    Soft-fail si pywin32 no está disponible (no-op en macOS/Linux).
+    """
+    try:
+        import win32gui  # type: ignore
+        import win32con  # type: ignore
+    except ImportError:
+        return
+
+    def callback(hwnd, _):
+        try:
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            if win32gui.IsIconic(hwnd):
+                # Ya minimizada por el usuario; no la tocamos.
+                return
+            titulo = win32gui.GetWindowText(hwnd)
+            if titulo in TITULOS_VENTANA_APP:
+                win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+                _VENTANAS_MINIMIZADAS_PARA_CAPTURA.append(hwnd)
+                _log(f"  Ventana minimizada para capturas: {titulo!r}")
+        except Exception:
+            pass
+
+    try:
+        win32gui.EnumWindows(callback, None)
+    except Exception as exc:
+        _log(f"  Error enumerando ventanas para minimizar: {exc!r}")
+
+
+def _restaurar_ventanas_app() -> None:
+    """Restaura las ventanas que `_minimizar_ventanas_app` minimizó
+    durante esta corrida. Soft-fail si pywin32 no está."""
+    if not _VENTANAS_MINIMIZADAS_PARA_CAPTURA:
+        return
+    try:
+        import win32gui  # type: ignore
+        import win32con  # type: ignore
+    except ImportError:
+        _VENTANAS_MINIMIZADAS_PARA_CAPTURA.clear()
+        return
+
+    for hwnd in _VENTANAS_MINIMIZADAS_PARA_CAPTURA:
+        try:
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        except Exception:
+            pass
+    _log(
+        f"  Restauradas {len(_VENTANAS_MINIMIZADAS_PARA_CAPTURA)} ventana(s) "
+        f"de la app tras el flujo de capturas."
+    )
+    _VENTANAS_MINIMIZADAS_PARA_CAPTURA.clear()
+
+
+def _verificar_capturas_disponibles() -> bool:
+    """Diagnóstico ejecutado al inicio del flujo SOX. Verifica que PIL +
+    `ImageGrab.grab()` estén disponibles y funcionales para capturar
+    pantalla; loguea el resultado para que el usuario sepa de antemano
+    si las capturas de la hoja IPE estarán vacías y por qué.
+
+    No retorna False de forma bloqueante — el flujo continúa igual; sólo
+    sirve para diagnóstico temprano.
+    """
+    try:
+        from PIL import __version__ as pil_version
+    except ImportError:
+        _log(
+            "⚠ Pillow NO está instalado en este entorno Python. "
+            "La hoja IPE del Población quedará con 'Captura no disponible' "
+            "en cada slot. Solución: `pip install -r requirements.txt` "
+            "(o `pip install Pillow`)."
+        )
+        return False
+
+    try:
+        from PIL import ImageGrab
+    except ImportError as exc:
+        _log(
+            f"⚠ Pillow {pil_version} instalado pero PIL.ImageGrab no se "
+            f"pudo importar — capturas IPE no funcionarán. Detalle: {exc!r}"
+        )
+        return False
+
+    try:
+        # Captura de prueba mínima (1 pixel) para validar que ImageGrab
+        # funciona en este sistema (no es remote desktop sin permisos,
+        # session 0 isolation, etc.).
+        ImageGrab.grab(bbox=(0, 0, 1, 1))
+        _log(
+            f"OK — Pillow {pil_version} + ImageGrab.grab() funcional. "
+            f"Las capturas de la hoja IPE deberían funcionar."
+        )
+        return True
+    except Exception as exc:
+        _log(
+            f"⚠ Pillow {pil_version} importado pero ImageGrab.grab(1x1) "
+            f"falló — capturas IPE estarán vacías. Detalle: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return False
+
+
 def _capturar_pantalla(output_path: Path) -> bool:
     """Captura toda la pantalla primaria (incluyendo barra de tareas) y la
-    guarda como PNG en `output_path`. Returns True si éxito."""
+    guarda como PNG en `output_path`. Returns True si éxito.
+
+    Si falla, loguea el tipo de excepción + las primeras líneas del
+    traceback para facilitar diagnóstico (vs sólo `repr(exc)` que a veces
+    no da pistas suficientes).
+    """
     try:
         from PIL import ImageGrab
     except ImportError:
-        _log(f"  Captura omitida (Pillow no instalado): {output_path.name}")
+        _log(
+            f"  Captura omitida (Pillow no instalado): {output_path.name}. "
+            f"Solución: `pip install -r requirements.txt`."
+        )
         return False
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         img = ImageGrab.grab()
         img.save(output_path, "PNG")
-        _log(f"  Captura guardada: {output_path.name} ({img.width}x{img.height})")
+        _log(
+            f"  Captura guardada: {output_path.name} "
+            f"({img.width}x{img.height})"
+        )
         return True
     except Exception as exc:
-        _log(f"  Error capturando pantalla {output_path.name}: {exc!r}")
+        import traceback
+        _log(
+            f"  Error capturando pantalla {output_path.name}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        # Loguear el traceback (limitado) para diagnosticar el origen real.
+        for line in traceback.format_exc().splitlines()[-5:]:
+            _log(f"    {line}")
         return False
 
 
-def _capturar_propiedades_archivo(archivo: Path, output_path: Path) -> bool:
-    """Abre el diálogo Propiedades del archivo en Windows Explorer vía
-    Shell COM, captura screenshot, y cierra el diálogo con Escape.
+def _esperar_archivo_listo(
+    archivo: Path, timeout_seg: float = 10.0, poll_seg: float = 0.5
+) -> bool:
+    """Espera a que `archivo` exista y su tamaño se estabilice (no esté
+    siendo escrito todavía). Retorna True si el archivo está listo dentro
+    del timeout, False en caso contrario.
 
-    Solo funciona en Windows con pywin32 instalado. No-op en otros sistemas.
+    Necesario porque SAP a veces tarda 1-3s en cerrar el handle del archivo
+    después de exportar, y abrir el diálogo Propiedades sobre un archivo
+    aún siendo escrito produce "Las propiedades para este archivo no están
+    disponibles" en Windows.
+    """
+    inicio = time.time()
+    tamano_previo = -1
+    while time.time() - inicio < timeout_seg:
+        if archivo.exists():
+            tamano = archivo.stat().st_size
+            if tamano > 0 and tamano == tamano_previo:
+                return True
+            tamano_previo = tamano
+        time.sleep(poll_seg)
+    return False
+
+
+def _capturar_propiedades_archivo(archivo: Path, output_path: Path) -> bool:
+    """Abre el diálogo Propiedades del archivo en Windows vía
+    `ShellExecuteExW` (API nativa, no COM), captura screenshot, y cierra
+    el diálogo con Escape.
+
+    Solo funciona en Windows. No-op en otros sistemas (ctypes.wintypes no
+    existe).
+
+    Usamos `ShellExecuteExW` en vez de `Shell.Application.NameSpace +
+    ParseName + InvokeVerb('Properties')` porque ese camino COM es
+    inestable cuando el thread tiene un apartment COM compartido con SAP
+    GUI Scripting — termina mostrando "Las propiedades para este archivo
+    no están disponibles" (caía al namespace del Escritorio).
     """
     try:
-        import win32com.client  # type: ignore
         import ctypes
+        from ctypes import wintypes
     except ImportError:
         _log(
-            f"  Captura propiedades omitida (pywin32 no disponible): "
-            f"{output_path.name}"
+            f"  Captura propiedades omitida (ctypes.wintypes no "
+            f"disponible — no es Windows): {output_path.name}"
         )
         return False
 
@@ -813,25 +988,69 @@ def _capturar_propiedades_archivo(archivo: Path, output_path: Path) -> bool:
         )
         return False
 
+    # SAP cierra el handle del archivo de forma asíncrona; esperar a que
+    # esté listo evita el error "propiedades no disponibles".
+    if not _esperar_archivo_listo(archivo):
+        _log(
+            f"  Archivo {archivo.name} no se estabilizó en 10s; "
+            f"intentando Propiedades igual."
+        )
+
     try:
-        shell = win32com.client.Dispatch("Shell.Application")
-        folder = shell.NameSpace(str(archivo.parent))
-        if folder is None:
-            _log(f"  No se pudo abrir folder COM: {archivo.parent}")
+        # SHELLEXECUTEINFOW + ShellExecuteExW: API canónica de Windows
+        # para invocar verbos del shell. fMask = INVOKEIDLIST hace que
+        # Properties abra el diálogo del shell estándar (no el de la
+        # aplicación que abre el archivo).
+        SEE_MASK_INVOKEIDLIST = 0x0000000C
+        SW_SHOWNORMAL = 1
+
+        class SHELLEXECUTEINFOW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("fMask", wintypes.ULONG),
+                ("hwnd", wintypes.HWND),
+                ("lpVerb", wintypes.LPCWSTR),
+                ("lpFile", wintypes.LPCWSTR),
+                ("lpParameters", wintypes.LPCWSTR),
+                ("lpDirectory", wintypes.LPCWSTR),
+                ("nShow", ctypes.c_int),
+                ("hInstApp", wintypes.HINSTANCE),
+                ("lpIDList", ctypes.c_void_p),
+                ("lpClass", wintypes.LPCWSTR),
+                ("hkeyClass", wintypes.HKEY),
+                ("dwHotKey", wintypes.DWORD),
+                ("hIcon", wintypes.HANDLE),
+                ("hProcess", wintypes.HANDLE),
+            ]
+
+        sei = SHELLEXECUTEINFOW()
+        sei.cbSize = ctypes.sizeof(sei)
+        sei.fMask = SEE_MASK_INVOKEIDLIST
+        sei.lpVerb = "properties"
+        # `.resolve()` para garantizar path absoluto — paths relativos
+        # confunden al shell y pueden caer al Escritorio.
+        sei.lpFile = str(archivo.resolve())
+        sei.lpDirectory = str(archivo.parent.resolve())
+        sei.nShow = SW_SHOWNORMAL
+
+        ok_invoke = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei))
+        if not ok_invoke:
+            err = ctypes.get_last_error() or 0
+            _log(
+                f"  ShellExecuteExW (verb=properties) falló (Win32 error "
+                f"{err}) para {archivo.name}"
+            )
             return False
-        item = folder.ParseName(archivo.name)
-        if item is None:
-            _log(f"  No se pudo localizar el archivo COM: {archivo.name}")
-            return False
-        item.InvokeVerb("Properties")
-        # Esperar a que el diálogo aparezca (es asíncrono).
-        time.sleep(2)
-        ok = _capturar_pantalla(output_path)
-        # Cerrar el diálogo enviando ESC (VK_ESCAPE = 0x1B).
+
+        # Dar tiempo a Windows para renderizar el diálogo de Propiedades.
+        time.sleep(2.5)
+        capturado = _capturar_pantalla(output_path)
+        # Cerrar el diálogo con ESC (VK_ESCAPE = 0x1B).
         # keybd_event: bScan=0, dwFlags=0 (key down), then dwFlags=2 (key up).
         ctypes.windll.user32.keybd_event(0x1B, 0, 0, 0)
         ctypes.windll.user32.keybd_event(0x1B, 0, 2, 0)
-        return ok
+        time.sleep(0.3)  # dar tiempo a que se cierre antes de continuar
+        return capturado
     except Exception as exc:
         _log(f"  Error capturando propiedades de {archivo.name}: {exc!r}")
         return False
@@ -1187,6 +1406,10 @@ def generar_reporte_sox(
 
     inicio = time.monotonic()
     _log("=== Iniciando flujo SOX ===")
+    # Diagnóstico temprano: si las capturas no van a funcionar (Pillow no
+    # instalado, ImageGrab roto), el usuario lo ve YA en los logs, no al
+    # final cuando ve la hoja IPE vacía.
+    _verificar_capturas_disponibles()
     abrir_transaccion_sox(session)
     ingresar_parametros(session, sociedad_norm, fecha_desde, fecha_hasta)
 
@@ -1196,58 +1419,71 @@ def generar_reporte_sox(
     with tempfile.TemporaryDirectory(prefix="sox_evidencias_") as tmp:
         screenshots_dir = Path(tmp)
 
-        # Screenshot 1: parámetros llenados, ANTES de F8.
-        _capturar_pantalla(screenshots_dir / "01_parametros_ingresados.png")
+        # Minimizar la ventana de la app Tkinter antes de capturar para
+        # que las screenshots IPE muestren SAP limpio sin la UI de la
+        # app encima. Se restaura al final (try/finally) pase lo que pase.
+        _minimizar_ventanas_app()
+        # Dar tiempo a que la animación de minimizar termine antes de la
+        # primera captura.
+        time.sleep(0.5)
 
-        ejecutar_reporte(session)
-        # Dar tiempo a que el grid de AR15 renderice los resultados antes
-        # de scrollear y capturar.
-        time.sleep(1.5)
+        try:
+            # Screenshot 1: parámetros llenados, ANTES de F8.
+            _capturar_pantalla(screenshots_dir / "01_parametros_ingresados.png")
 
-        # Screenshot 2: primer registro de la tabla.
-        _scroll_grid_a_primero(session)
-        _capturar_pantalla(screenshots_dir / "02_primer_registro.png")
+            ejecutar_reporte(session)
+            # Dar tiempo a que el grid de AR15 renderice los resultados antes
+            # de scrollear y capturar.
+            time.sleep(1.5)
 
-        # Screenshot 3: último registro (scroll al final).
-        _scroll_grid_a_ultimo(session)
-        _capturar_pantalla(screenshots_dir / "03_ultimo_registro.png")
-        # Restablecer la posición del cursor antes de exportar (algunas
-        # versiones de SAP exportan desde la fila seleccionada).
-        _scroll_grid_a_primero(session)
+            # Screenshot 2: primer registro de la tabla.
+            _scroll_grid_a_primero(session)
+            _capturar_pantalla(screenshots_dir / "02_primer_registro.png")
 
-        exportar_a_excel(session, carpeta_destino, nombre_archivo)
+            # Screenshot 3: último registro (scroll al final).
+            _scroll_grid_a_ultimo(session)
+            _capturar_pantalla(screenshots_dir / "03_ultimo_registro.png")
+            # Restablecer la posición del cursor antes de exportar (algunas
+            # versiones de SAP exportan desde la fila seleccionada).
+            _scroll_grid_a_primero(session)
 
-        # Screenshot 4: status bar SAP con bytes recién exportados.
-        _capturar_pantalla(screenshots_dir / "04_status_bar_bytes.png")
+            exportar_a_excel(session, carpeta_destino, nombre_archivo)
 
-        # Screenshot 5: diálogo Propiedades del archivo SAP en Windows.
-        archivo_sap = Path(carpeta_destino) / nombre_archivo
-        _capturar_propiedades_archivo(
-            archivo_sap,
-            screenshots_dir / "05_propiedades_archivo.png",
-        )
+            # Screenshot 4: status bar SAP con bytes recién exportados.
+            _capturar_pantalla(screenshots_dir / "04_status_bar_bytes.png")
 
-        if EXPORT_METHOD is None:
-            _log(
-                "EXPORT_METHOD=None → omitiendo Población y hoja IPE "
-                "(no hay archivo SAP del cual leer)."
+            # Screenshot 5: diálogo Propiedades del archivo SAP en Windows.
+            archivo_sap = Path(carpeta_destino) / nombre_archivo
+            _capturar_propiedades_archivo(
+                archivo_sap,
+                screenshots_dir / "05_propiedades_archivo.png",
             )
-            duracion = time.monotonic() - inicio
-            _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
-            return carpeta_destino, nombre_archivo
 
-        archivo_poblacion = generar_xlsx_poblacion(
-            archivo_sap,
-            Path(carpeta_destino),
-            sociedad_norm,
-            fecha_hasta,
-        )
+            if EXPORT_METHOD is None:
+                _log(
+                    "EXPORT_METHOD=None → omitiendo Población y hoja IPE "
+                    "(no hay archivo SAP del cual leer)."
+                )
+                duracion = time.monotonic() - inicio
+                _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
+                return carpeta_destino, nombre_archivo
 
-        # Etapas post-procesamiento: añadir hojas Creados e IPE al
-        # workbook Población. IPE va al final porque embebe las capturas
-        # del tempdir antes de que éste se elimine al salir del `with`.
-        generar_hoja_creados(archivo_poblacion)
-        generar_hoja_ipe(archivo_poblacion, screenshots_dir)
+            archivo_poblacion = generar_xlsx_poblacion(
+                archivo_sap,
+                Path(carpeta_destino),
+                sociedad_norm,
+                fecha_hasta,
+            )
+
+            # Etapas post-procesamiento: añadir hojas Creados e IPE al
+            # workbook Población. IPE va al final porque embebe las capturas
+            # del tempdir antes de que éste se elimine al salir del `with`.
+            generar_hoja_creados(archivo_poblacion)
+            generar_hoja_ipe(archivo_poblacion, screenshots_dir)
+        finally:
+            # Restaurar la ventana de la app aunque haya fallado alguna
+            # etapa — si no, el usuario se queda sin GUI visible.
+            _restaurar_ventanas_app()
 
     duracion = time.monotonic() - inicio
     _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
