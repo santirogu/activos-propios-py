@@ -55,6 +55,8 @@ La ventana muestra dos botones:
 - **Extraer información en txt** — funciona en cualquier sistema operativo.
 - **Subir a SAP** — solo funciona en Windows con SAP GUI configurado.
 
+La GUI usa la **paleta corporativa Hub de ISA** (navy `#1A3A6C` + naranja `#F58220`, definida en [`src/branding.py`](src/branding.py)). El logo se carga desde `resources/logo_hub_isa.png` (opcional — si el archivo no está, la GUI muestra sólo texto con colores).
+
 ## Cómo ejecutar la app
 
 ```bash

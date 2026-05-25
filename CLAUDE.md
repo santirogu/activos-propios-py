@@ -31,7 +31,8 @@ La autenticación SAP es manual; el script no logea al usuario, solo se conecta 
 ├── src/
 │   ├── main.py          # GUI Tkinter: 3 botones + test de conexión
 │   ├── sap_upload.py    # Flujo LSMW completo (10 pasos) vía SAP GUI Scripting
-│   └── sox_report.py    # Flujo Reporte SOX (4 pasos) vía SAP GUI Scripting
+│   ├── sox_report.py    # Flujo Reporte SOX (4 pasos) vía SAP GUI Scripting
+│   └── branding.py      # Paleta corporativa Hub de ISA + helpers para Tk
 ├── tests/
 │   ├── test_main.py         # 63 pruebas: extracción + handlers de botones + diálogo SOX
 │   ├── test_sap_upload.py   # 36 pruebas: cada paso del flujo LSMW aislado
@@ -52,6 +53,30 @@ La autenticación SAP es manual; el script no logea al usuario, solo se conecta 
 ```
 
 Nota: la carpeta `salida/` está en `.gitignore` y se crea en runtime cuando se extraen .txt o se genera el reporte SOX.
+
+## 3.5. Branding corporativo — `src/branding.py`
+
+Centraliza paleta + logo para que `main.py` y `control_sox` mantengan apariencia consistente.
+
+### Paleta (Hub de ISA)
+- `ISA_AZUL = "#1A3A6C"` — navy del cuerpo del logo. Titulares, botones primarios.
+- `ISA_AZUL_HOVER = "#2B5CA8"` — hover/pressed.
+- `ISA_NARANJA = "#F58220"` — naranja del swoosh. Acento sobrio (no usado en botones primarios para no saturar).
+- `ISA_NARANJA_HOVER = "#D96D14"`.
+- `ISA_GRIS = "#555555"`, `ISA_GRIS_CLARO = "#888888"` — texto secundario.
+- `ISA_BLANCO = "#FFFFFF"`, `ISA_FONDO = "#FFFFFF"`.
+- `ISA_VERDE_OK = "#1a7f37"` — status success (conservado del esquema previo).
+
+### Logo
+- `LOGO_PATH = resources/logo_hub_isa.png` (PNG RGBA, 469×286 nativo).
+- `cargar_logo(altura_px=55)` devuelve un `PIL.ImageTk.PhotoImage` escalado por aspect ratio, o `None` si: el archivo no existe / Pillow no está / Tk no está / error de carga. Loguea sólo el último caso (los demás son condiciones esperadas en dev).
+- **Trampa Tk**: el caller DEBE guardar la referencia del PhotoImage en algún atributo persistente (ej. `root._logo_ref = cargar_logo()`). Si no, GC libera la imagen y Tk muestra cuadro vacío. Aplicado en `main()` y reusado en `control_sox`.
+
+### Estilos de botón
+- `aplicar_estilo_primario(btn)` — fondo navy, fg blanco, hover azul claro, `relief="flat"`, `bd=0`, `cursor="hand2"`, `font=("Helvetica", 11, "bold")`. Aplicado a Extraer, Subir a SAP, Control SOX, Generar Reporte SOX.
+- `aplicar_estilo_terciario(btn)` — fondo blanco, fg gris, hover gris claro→fg navy, `relief="flat"`, `bd=1`. Aplicado a Test conexión SAP y ← Atrás.
+
+Nota macOS: `tk.Button` ignora `bg`/`activebackground` en aqua por default (sólo respeta `fg`). En Windows funcionan. Como la app es Windows-only para SAP, en macOS los botones se ven nativos en vez de coloreados — aceptable.
 
 ## 4. GUI — `src/main.py`
 

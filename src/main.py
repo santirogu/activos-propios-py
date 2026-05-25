@@ -10,6 +10,8 @@ from datetime import datetime
 import openpyxl
 from tkcalendar import DateEntry
 
+import branding
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EXCEL_PATH = PROJECT_ROOT / "resources" / "Formato_Dinamico_.xlsx"
 OUTPUT_DIR = PROJECT_ROOT / "salida"
@@ -426,9 +428,9 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     # botón Subir, etc.) para no perder progreso si el usuario vuelve.
     frame_menu.pack_forget()
 
-    frame_sox = tk.Frame(root)
+    frame_sox = tk.Frame(root, bg=branding.ISA_FONDO)
 
-    # --- Botón Atrás (esquina superior izquierda) ---
+    # --- Botón Atrás (esquina superior izquierda, estilo discreto) ---
     btn_atras = tk.Button(
         frame_sox,
         text="← Atrás",
@@ -436,6 +438,7 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
         padx=8,
         pady=2,
     )
+    branding.aplicar_estilo_terciario(btn_atras)
     btn_atras.pack(anchor="w", padx=10, pady=(10, 0))
 
     def volver_al_menu() -> None:
@@ -444,24 +447,36 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
 
     btn_atras.config(command=volver_al_menu)
 
+    # --- Logo arriba del título (reusa la referencia del root) ---
+    if getattr(root, "_logo_ref", None) is not None:
+        tk.Label(
+            frame_sox, image=root._logo_ref, bg=branding.ISA_FONDO
+        ).pack(pady=(4, 6))
+
     # --- Título ---
     tk.Label(
-        frame_sox, text="Control SOX", font=("Helvetica", 13, "bold")
+        frame_sox,
+        text="Control SOX",
+        font=("Helvetica", 13, "bold"),
+        fg=branding.ISA_AZUL,
+        bg=branding.ISA_FONDO,
     ).pack(pady=(4, 4))
     tk.Label(
         frame_sox,
         text="Genera el Reporte SOX con los parámetros indicados",
         font=("Helvetica", 10),
-        fg="#555",
+        fg=branding.ISA_GRIS,
+        bg=branding.ISA_FONDO,
     ).pack(pady=(0, 12))
 
-    form = tk.Frame(frame_sox)
+    form = tk.Frame(frame_sox, bg=branding.ISA_FONDO)
     form.pack(pady=(0, 12))
 
     # --- Sociedad (Combobox readonly) ---
-    tk.Label(form, text="Sociedad:", anchor="e", width=10).grid(
-        row=0, column=0, padx=4, pady=6, sticky="e"
-    )
+    tk.Label(
+        form, text="Sociedad:", anchor="e", width=10,
+        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+    ).grid(row=0, column=0, padx=4, pady=6, sticky="e")
     sociedad_var = tk.StringVar()
     sociedad_combo = ttk.Combobox(
         form,
@@ -479,9 +494,10 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     vcmd = (root.register(validar_caracter_fecha), "%P")
     fecha_hoy = datetime.now()
 
-    tk.Label(form, text="Desde:", anchor="e", width=10).grid(
-        row=1, column=0, padx=4, pady=6, sticky="e"
-    )
+    tk.Label(
+        form, text="Desde:", anchor="e", width=10,
+        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+    ).grid(row=1, column=0, padx=4, pady=6, sticky="e")
     desde_var = tk.StringVar()
     desde_entry = DateEntry(
         form,
@@ -498,13 +514,15 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
         day=fecha_hoy.day,
     )
     desde_entry.grid(row=1, column=1, padx=4, pady=6, sticky="w")
-    tk.Label(form, text="(dd.mm.aaaa)", fg="#777").grid(
-        row=1, column=2, padx=4
-    )
+    tk.Label(
+        form, text="(dd.mm.aaaa)",
+        fg=branding.ISA_GRIS_CLARO, bg=branding.ISA_FONDO,
+    ).grid(row=1, column=2, padx=4)
 
-    tk.Label(form, text="Hasta:", anchor="e", width=10).grid(
-        row=2, column=0, padx=4, pady=6, sticky="e"
-    )
+    tk.Label(
+        form, text="Hasta:", anchor="e", width=10,
+        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+    ).grid(row=2, column=0, padx=4, pady=6, sticky="e")
     hasta_var = tk.StringVar()
     hasta_entry = DateEntry(
         form,
@@ -521,18 +539,18 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
         day=fecha_hoy.day,
     )
     hasta_entry.grid(row=2, column=1, padx=4, pady=6, sticky="w")
-    tk.Label(form, text="(dd.mm.aaaa)", fg="#777").grid(
-        row=2, column=2, padx=4
-    )
+    tk.Label(
+        form, text="(dd.mm.aaaa)",
+        fg=branding.ISA_GRIS_CLARO, bg=branding.ISA_FONDO,
+    ).grid(row=2, column=2, padx=4)
 
     status_var = tk.StringVar()
 
     btn_generar = tk.Button(
         frame_sox,
         text="Generar Reporte SOX",
-        font=("Helvetica", 11),
         padx=18,
-        pady=6,
+        pady=8,
     )
     btn_generar.config(
         command=lambda: _generar_reporte_sox_handler(
@@ -545,13 +563,15 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
             btn_atras,
         )
     )
+    branding.aplicar_estilo_primario(btn_generar)
     btn_generar.pack()
 
     tk.Label(
         frame_sox,
         textvariable=status_var,
         font=("Helvetica", 9),
-        fg="#1a7f37",
+        fg=branding.ISA_VERDE_OK,
+        bg=branding.ISA_FONDO,
         wraplength=460,
     ).pack(pady=(12, 0))
 
@@ -602,30 +622,43 @@ def main() -> None:
     root = tk.Tk()
     _install_tk_exception_handler(root)
     root.title("Creación Activos SAP")
-    root.geometry("480x380")
+    # Ventana un poco más alta (era 380) para acomodar el logo arriba.
+    root.geometry("520x460")
     root.resizable(False, False)
+    root.configure(bg=branding.ISA_FONDO)
 
     # Todos los widgets del menú principal viven dentro de `frame_menu`
     # (no directo en `root`) para que `control_sox` pueda ocultarlo con
     # pack_forget y mostrar su propio frame en la misma ventana,
     # preservando el estado del menú (status_var, polling, etc.).
-    frame_menu = tk.Frame(root)
+    frame_menu = tk.Frame(root, bg=branding.ISA_FONDO)
+
+    # Logo Hub de ISA arriba. Si el archivo no existe, _logo_ref es None
+    # y simplemente no se renderiza la imagen (graceful fallback). La
+    # referencia se guarda en `root` para que GC no libere la imagen.
+    root._logo_ref = branding.cargar_logo()
+    if root._logo_ref is not None:
+        logo_label = tk.Label(frame_menu, image=root._logo_ref, bg=branding.ISA_FONDO)
+        logo_label.pack(pady=(18, 6))
 
     title = tk.Label(
         frame_menu,
         text="Creación de Activos Fijos en SAP",
         font=("Helvetica", 13, "bold"),
+        fg=branding.ISA_AZUL,
+        bg=branding.ISA_FONDO,
     )
-    title.pack(pady=(18, 4))
+    title.pack(pady=(4, 4))
 
     subtitle = tk.Label(
         frame_menu,
         text=f"Origen: resources/{EXCEL_PATH.name}\nDestino: salida/",
         font=("Helvetica", 10),
-        fg="#555",
+        fg=branding.ISA_GRIS,
+        bg=branding.ISA_FONDO,
         justify="center",
     )
-    subtitle.pack(pady=(0, 12))
+    subtitle.pack(pady=(0, 14))
 
     status_var = tk.StringVar(value="")
 
@@ -633,55 +666,56 @@ def main() -> None:
         frame_menu,
         text="Extraer información en txt",
         command=lambda: extraer_lsmw_a_txt(status_var),
-        font=("Helvetica", 11),
         padx=18,
-        pady=6,
+        pady=8,
         width=24,
     )
+    branding.aplicar_estilo_primario(btn_extraer)
     btn_extraer.pack(pady=(0, 8))
 
     btn_subir = tk.Button(
         frame_menu,
         text="Subir a SAP",
-        font=("Helvetica", 11),
         padx=18,
-        pady=6,
+        pady=8,
         width=24,
         state="disabled",
     )
     btn_subir.config(command=lambda: subir_a_sap(root, status_var, btn_subir))
+    branding.aplicar_estilo_primario(btn_subir)
     btn_subir.pack(pady=(0, 8))
 
     btn_sox = tk.Button(
         frame_menu,
         text="Control SOX",
-        font=("Helvetica", 11),
         padx=18,
-        pady=6,
+        pady=8,
         width=24,
         command=lambda: control_sox(root, frame_menu),
     )
-    btn_sox.pack(pady=(0, 12))
+    branding.aplicar_estilo_primario(btn_sox)
+    btn_sox.pack(pady=(0, 14))
 
     # Botón de diagnóstico: verifica si la conexión a SAP está disponible
-    # sin ejecutar un flujo completo. Estilo secundario (más pequeño) para
-    # marcar que es una herramienta de troubleshooting, no de uso normal.
+    # sin ejecutar un flujo completo. Estilo terciario (más pequeño, gris)
+    # para marcar que es una herramienta de troubleshooting.
     btn_test = tk.Button(
         frame_menu,
         text="Test conexión SAP",
         font=("Helvetica", 9),
-        fg="#555",
         padx=10,
         pady=2,
         command=_test_conexion_sap_handler,
     )
+    branding.aplicar_estilo_terciario(btn_test)
     btn_test.pack()
 
     status = tk.Label(
         frame_menu,
         textvariable=status_var,
         font=("Helvetica", 9),
-        fg="#1a7f37",
+        fg=branding.ISA_VERDE_OK,
+        bg=branding.ISA_FONDO,
         wraplength=440,
     )
     status.pack(pady=(12, 0))
