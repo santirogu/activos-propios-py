@@ -26,6 +26,7 @@ El proceso completo contempla:
 - **Python 3.9 o superior** con soporte para Tkinter (incluido por defecto; en macOS, el Python de Homebrew 3.12 **no** trae Tk — usa `python.org` o el del sistema).
 - **openpyxl** — manipulación del Excel (multiplataforma).
 - **tkcalendar** — widget de calendario para los campos de fecha del Control SOX (multiplataforma).
+- **Pillow** ≥ 10.0 — captura de pantalla para las evidencias IPE del Reporte SOX (multiplataforma; en Windows captura desktop completo incluyendo barra de tareas).
 - **pywin32** — solo necesario para los botones "Subir a SAP" y "Generar Reporte SOX". Se instala automáticamente solo en Windows gracias al marcador `platform_system == "Windows"` en `requirements.txt`.
 - El archivo `resources/Formato_Dinamico_.xlsx` debe existir.
 - Para subir a SAP: SAP GUI for Windows abierto con sesión iniciada y `sapgui/user_scripting = TRUE` (ver sección "Configuración SAP" más abajo).
@@ -103,9 +104,10 @@ Validaciones al presionar **"Generar Reporte SOX"**:
 Si cualquier validación falla, se muestra un diálogo de error y no se ejecuta nada. Si todo es válido, se pide confirmación y el flujo SAP corre en un hilo background. Durante la ejecución del worker, tanto el botón **"Generar Reporte SOX"** como el **"← Atrás"** se deshabilitan (el usuario no puede volver al menú a mitad de un flujo SAP); ambos se re-habilitan al finalizar. Al terminar quedan **dos archivos** en `salida/`:
 
 - **Intermedio** `SOX_<SOCIEDAD>_<YYYYMMDD_HHMMSS>.xlsx` — lo que SAP exportó vía `&XXL` del ALV grid.
-- **Final / deliverable** `Población_<SOCIEDAD>_<FECHA_HASTA>.xlsx` — generado en Python con **dos hojas**:
+- **Final / deliverable** `Población_<SOCIEDAD>_<FECHA_HASTA>.xlsx` — generado en Python con **tres hojas**:
   - `Original_SAP`: copia 1:1 del intermedio, celda por celda, preservando el `number_format` de cada una (Fecha `mm-dd-yy` y Hora `[$-F400]h:mm:ss\ AM/PM` se ven como en SAP, no con el ISO 24h default de openpyxl).
   - `Creados`: subconjunto de `Original_SAP` filtrado por `G == "*** creado ***"`, con la columna D (`AF <code>-<sub> <denom>`) descompuesta en `Activo Fijo` (int), `Subnúmero` (int) y `Identificación de objeto editada` (denominación, texto). Añade dos columnas como **fórmulas Excel en inglés** (estándar OOXML; Excel-ES las muestra como `EXTRAE` y `SI` en la barra de fórmulas, no valores pre-calculados): K = `=MID(D{n},1,2)` (primeros 2 dígitos del código, queda como texto), L = `=IF(K{n}="19","Intangible",IF(K{n}="20","Activo Construcción",IF(K{n}="14","Activo Construcción","PPE")))` (header `"PPE o Intangible"`). Las fórmulas se evalúan al abrir el archivo — si el usuario modifica D, K y L recalcularán. Bloque de observaciones explicativas en filas 1-9, headers en bold en fila 10, datos desde fila 11.
+  - `IPE`: 5 capturas de pantalla embebidas como evidencia visual del proceso, en orden: (1) pantalla de Modificaciones con sociedad y fechas ingresadas antes de F8 (incluye barra de tareas de Windows), (2) primer registro de la tabla del grid AR15, (3) último registro (scroll al final via `grid.firstVisibleRow`/`RowCount`), (4) status bar SAP con los bytes exportados, (5) diálogo Propiedades del archivo SAP en Windows (los bytes deben coincidir con #4). Cada imagen lleva un título descriptivo encima y se escala a un ancho máximo de 1200 px. Las capturas se generan en un tempdir temporal durante el flujo SAP y se embeben aquí al final; el tempdir se limpia automáticamente. Si alguna captura falla (PIL ausente, diálogo Propiedades no abre, scroll del grid no funciona), se anota como "no disponible" sin romper el reporte (soft-fail).
 
   Es el nombre que el handler GUI muestra en el diálogo de éxito. Ejemplo: `Población_ISA_31.03.2026.xlsx`.
 
@@ -184,7 +186,7 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **216 pruebas** distribuidas en tres archivos:
+La suite contiene **226 pruebas** distribuidas en tres archivos:
 
 #### `tests/test_main.py` (75 pruebas)
 
@@ -238,7 +240,7 @@ La suite contiene **216 pruebas** distribuidas en tres archivos:
 | `test_worker_handles_lsmw_flow_error` | Excepción del flujo → error, NO muestra info de éxito |
 | `test_worker_resets_status_on_error` | `status_var` se vacía tras error |
 
-#### `tests/test_sox_report.py` (95 pruebas)
+#### `tests/test_sox_report.py` (105 pruebas)
 
 | Clase | Tests | Cobertura |
 |---|---|---|
@@ -255,6 +257,8 @@ La suite contiene **216 pruebas** distribuidas en tres archivos:
 | **`GenerarXlsxPoblacionTest`** | 11 | Crea archivo con nombre estándar (`Población_{SOC}_{FECHA}.xlsx`), hoja `Original_SAP`, copia contenido, preserva datetime/numeric + `number_format` por celda (Fecha `mm-dd-yy`, Hora AM/PM), crea carpeta destino, normaliza fecha con whitespace, rechaza source missing / non-xlsx / fecha inválida |
 | **`PatronAfRegexTest`** | 6 | Regex `^AF\s+(\d+)-(\d+)\s+(.+)$` parsea código + subnúmero + denominación; acepta múltiples espacios después de "AF", caracteres especiales y guiones en la denominación; rechaza prefijos distintos a "AF" y código no-numérico |
 | **`GenerarHojaCreadosTest`** | 14 | Filter `*** creado ***` (exact match, case-sensitive), parseo de col D, headers en bold (fila 10, col L = `"PPE o Intangible"`), datos desde fila 11, columnas K y L como **fórmulas Excel en inglés** (`=MID(D{n},1,2)` y `=IF(...IF(...IF(...)))` anidado, con referencias por fila — Excel-ES las muestra como EXTRAE/SI al abrir), preserva `number_format` de Fecha/Hora, omite y cuenta filas que no matchean regex o tienen col D no-string, reemplaza hoja Creados existente (idempotente), valida que el workbook tenga `Original_SAP`, archivo source missing |
+| **`EjecutarReporteTest`** | 2 | Split de F8: `ingresar_parametros` NO presiona F8 (`test_does_not_press_f8`); `ejecutar_reporte` SÍ lo hace y re-raise con contexto si btn[8] falta |
+| **`GenerarHojaIpeTest`** | 8 | Crea la hoja IPE alongside Original_SAP+Creados; embebe los 5 screenshots cuando están todos; escribe título + descripciones; soft-fail cuando faltan capturas (anota "no disponible", reporta missing_names); soft-fail sin ninguna captura; replaza hoja IPE existente; escala imágenes wider que `IPE_IMAGE_MAX_WIDTH`; no escala imágenes pequeñas |
 | `MainEntryPointTest` | 5 | Exit codes según argumentos y errores de validación/SAP |
 
 #### `tests/test_sap_upload.py` (46 pruebas)
@@ -292,7 +296,7 @@ La suite contiene **216 pruebas** distribuidas en tres archivos:
 ├── tests/
 │   ├── test_main.py                 # 75 pruebas: extracción + botones + vista SOX (frame embebido)
 │   ├── test_sap_upload.py           # 46 pruebas: flujo LSMW completo
-│   └── test_sox_report.py           # 95 pruebas: validaciones + flujo SOX + paso Población + paso Creados
+│   └── test_sox_report.py           # 105 pruebas: validaciones + flujo SOX + Población + Creados + IPE (capturas)
 ├── resources/
 │   ├── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla
 │   ├── script_sap_base.txt          # Grabación VBS del flujo LSMW (UTF-16)
@@ -337,14 +341,20 @@ Esta separación granular permite testear cada paso de forma aislada con un `Moc
 
 | Paso | Función Python | Acciones SAP / Python |
 |---|---|---|
-| 1/5 | `abrir_transaccion_sox` | `okcd = "AR15"` + sendVKey 0 (modo T-code, robusto). Fallback: tree.doubleClickNode |
-| 2a/5 | `ingresar_parametros` | `P_BUKRS.text = sociedad` |
-| 2b/5 | `_seleccionar_fecha_calendario` (Desde) | foco S_DATUM-LOW + caretPosition 0 + sendVKey 4 (F4) + calendar.focusDate/selectionInterval con `yyyymmdd` |
-| 2c/5 | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH con la fecha hasta |
-| 3/5 | `ingresar_parametros` | F8 (`btn[8].press`) — ejecuta reporte |
-| 4/5 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) | `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `DY_PATH`/`DY_FILENAME` + `btn[11]` (Generar/Reemplazar; `btn[0]` no existe en este diálogo). Produce `SOX_<SOC>_<TIMESTAMP>.xlsx`. Si `EXPORT_METHOD="pc_list"` usa `%PC` + `btn[0]` (sólo aplica a listas clásicas, NO a AR15). |
-| 5/6 | `generar_xlsx_poblacion` (pure Python, post-SAP) | `openpyxl.load_workbook` del intermedio → itera celda por celda copiando `value` + `number_format` a una hoja `Original_SAP` (preservando el formato corto de Fecha `mm-dd-yy` y de Hora `[$-F400]h:mm:ss\ AM/PM` que usa SAP) → `wb.save("Población_<SOC>_<FECHA_HASTA>.xlsx")`. Se omite si `EXPORT_METHOD=None`. |
-| 6/6 | `generar_hoja_creados` (pure Python, post-procesamiento) | Abre el `Población_*.xlsx`, lee `Original_SAP`, filtra filas con `G == "*** creado ***"`, parsea col D con `re.compile(r"^AF\s+(\d+)-(\d+)\s+(.+)$")` → escribe una **segunda hoja `Creados`** en el mismo workbook con: bloque de observaciones (filas 1-9), headers en bold (fila 10, col L = `"PPE o Intangible"`), datos desde fila 11. **Columnas K y L como fórmulas Excel en inglés (estándar OOXML)**: K = `=MID(D{n},1,2)`, L = `=IF(K{n}="19","Intangible",IF(K{n}="20","Activo Construcción",IF(K{n}="14","Activo Construcción","PPE")))`. Excel-ES traduce automáticamente al mostrar (EXTRAE/SI). Escribir las fórmulas en español directamente daña el archivo (Excel reporta "contenido con problema"). Excel evalúa las fórmulas al abrir (no se calculan en Python). Filas que pasan filtro pero col D no matchea el regex se loguean y omiten. Es el deliverable final que devuelve `generar_reporte_sox`. |
+| 1/7 | `abrir_transaccion_sox` | `okcd = "AR15"` + sendVKey 0 (modo T-code, robusto). Fallback: tree.doubleClickNode |
+| 2a/7 | `ingresar_parametros` (split, ya no incluye F8) | `P_BUKRS.text = sociedad` |
+| 2b/7 | `_seleccionar_fecha_calendario` (Desde) | foco S_DATUM-LOW + caretPosition 0 + sendVKey 4 (F4) + calendar.focusDate/selectionInterval con `yyyymmdd` |
+| 2c/7 | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH con la fecha hasta |
+| 2.5/7 | `_capturar_pantalla` | **Screenshot 1** (parámetros + Windows taskbar) → tempdir `01_parametros_ingresados.png` |
+| 3/7 | `ejecutar_reporte` (split de `ingresar_parametros`) | F8 (`btn[8].press`) — ejecuta reporte |
+| 3.5a/7 | `_scroll_grid_a_primero` + `_capturar_pantalla` | **Screenshot 2** del primer registro del grid AR15 |
+| 3.5b/7 | `_scroll_grid_a_ultimo` + `_capturar_pantalla` | **Screenshot 3** del último registro (`grid.RowCount - 1`) |
+| 4/7 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) | `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `DY_PATH`/`DY_FILENAME` + `btn[11]` (Generar/Reemplazar; `btn[0]` no existe en este diálogo). Produce `SOX_<SOC>_<TIMESTAMP>.xlsx`. Si `EXPORT_METHOD="pc_list"` usa `%PC` + `btn[0]` (sólo aplica a listas clásicas, NO a AR15). |
+| 4.5a/7 | `_capturar_pantalla` | **Screenshot 4** (SAP status bar con bytes recién exportados) |
+| 4.5b/7 | `_capturar_propiedades_archivo` | **Screenshot 5** — abre el diálogo Propiedades de Windows vía `Shell.Application` COM, captura, cierra con ESC vía `user32.keybd_event(0x1B)` |
+| 5/7 | `generar_xlsx_poblacion` (pure Python, post-SAP) | `openpyxl.load_workbook` del intermedio → itera celda por celda copiando `value` + `number_format` a una hoja `Original_SAP` (preservando Fecha `mm-dd-yy` y Hora `[$-F400]h:mm:ss\ AM/PM`) → `wb.save("Población_<SOC>_<FECHA_HASTA>.xlsx")`. Se omite (junto con 6 y 7) si `EXPORT_METHOD=None`. |
+| 6/7 | `generar_hoja_creados` (pure Python, post-procesamiento) | Abre el `Población_*.xlsx`, lee `Original_SAP`, filtra filas con `G == "*** creado ***"`, parsea col D con `re.compile(r"^AF\s+(\d+)-(\d+)\s+(.+)$")` → escribe una **segunda hoja `Creados`** con: observaciones (filas 1-9), headers en bold (fila 10, col L = `"PPE o Intangible"`), datos desde fila 11. **Columnas K y L como fórmulas Excel en inglés (estándar OOXML)**: K = `=MID(D{n},1,2)`, L = `=IF(K{n}="19","Intangible",IF(K{n}="20","Activo Construcción",IF(K{n}="14","Activo Construcción","PPE")))`. Excel-ES traduce automáticamente al mostrar (EXTRAE/SI). Escribir las fórmulas en español directamente daña el archivo (Excel reporta "contenido con problema"). Filas que pasan filtro pero col D no matchea el regex se loguean y omiten. |
+| 7/7 | `generar_hoja_ipe(poblacion, screenshots_dir)` (paso final, pure Python) | Lee los 5 PNG del tempdir y los embebe en una **tercera hoja `IPE`** con título + descripción + imagen escalada a `IPE_IMAGE_MAX_WIDTH=1200px`. Soft-fail: capturas faltantes se anotan como "no disponible" pero el flujo continúa. Tempdir se limpia automáticamente al salir del `with tempfile.TemporaryDirectory(...)`. Es el deliverable final que devuelve `generar_reporte_sox`. |
 | Assign Files | 7 | `step_assign_files` | btn[32] + VK3 |
 | Read Data | 8 | `step_read_data` | btn[32] + btn[8] + 2×VK3 |
 | Display Read Data | (auto-avanza) | `step_display_read_data` | btn[32] + popup + VK3 |

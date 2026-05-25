@@ -20,7 +20,8 @@ La autenticación SAP es manual; el script no logea al usuario, solo se conecta 
 - **Python 3.9+** con soporte Tkinter (en macOS, el Python de Homebrew 3.12 NO trae Tk → usar `python.org` o el del sistema).
 - **openpyxl** ≥ 3.1 — lee/escribe Excel (multiplataforma).
 - **tkcalendar** ≥ 1.6 — widget `DateEntry` para los campos de fecha SOX.
-- **pywin32** ≥ 306 — solo Windows (`platform_system == "Windows"`); requerido para "Subir a SAP" y "Generar Reporte SOX". Marker en `requirements.txt` lo evita en macOS/Linux.
+- **Pillow** ≥ 10.0 — captura de pantalla (`ImageGrab`) para las evidencias IPE del flujo SOX. Multiplataforma; en Windows captura desktop completo incluyendo barra de tareas.
+- **pywin32** ≥ 306 — solo Windows (`platform_system == "Windows"`); requerido para "Subir a SAP" y "Generar Reporte SOX" (incluye `Shell.Application` COM para abrir el diálogo Propiedades del archivo SAP). Marker en `requirements.txt` lo evita en macOS/Linux.
 - Pruebas: `unittest` (stdlib, sin dependencias extra).
 
 ## 3. Estructura del repo
@@ -141,28 +142,36 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 - `ALV_SAVE_DIALOG_OK_BTN = "btn[11]"` — el diálogo de save abierto por `&XXL` en AR15 confirma con `btn[11]` (Generar/Reemplazar). `btn[0]` no existe en ese diálogo y fue el origen del error `"The control could not be found by id"` cuando el default era `pc_list`. `_rellenar_save_dialog(..., boton_ok_id=...)` permite parametrizar cuál botón presionar.
 - `STANDARD_FILE_PREFIX = "Población"` y `STANDARD_SHEET_NAME = "Original_SAP"` — usados por `generar_xlsx_poblacion` para nombrar el archivo final y la hoja interna. Patrón: `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx`.
 - `CREADOS_SHEET_NAME = "Creados"`, `CREADOS_FILTRO_VALOR = "*** creado ***"`, `PATRON_AF = re.compile(r"^AF\s+(\d+)-(\d+)\s+(.+)$")`, `CREADOS_HEADERS`, `CREADOS_OBSERVACIONES` — usados por `generar_hoja_creados` para producir la segunda hoja del Población. Las columnas K y L son **fórmulas Excel** que se evalúan al abrir el archivo (no valores pre-calculados): K = `=MID(D{n},1,2)`, L = `=IF(K{n}="19","Intangible",IF(K{n}="20","Activo Construcción",IF(K{n}="14","Activo Construcción","PPE")))`. Las fórmulas se escriben en **inglés con `,` como separador** (estándar OOXML); Excel-ES las muestra automáticamente como `EXTRAE` y `SI` en la barra de fórmulas. Header de L = `"PPE o Intangible"`.
+- `IPE_SHEET_NAME = "IPE"`, `IPE_SCREENSHOTS_INFO` (tupla de 5 `(filename, descripcion)`), `IPE_IMAGE_MAX_WIDTH = 1200` — usados por `generar_hoja_ipe` para construir la tercera hoja del Población con 5 capturas de pantalla embebidas: (1) parámetros ingresados antes de F8, (2) primer registro del grid AR15, (3) último registro (scroll al final), (4) status bar SAP con bytes exportados, (5) diálogo Propiedades del archivo SOX en Windows. Las capturas son **soft-fail**: si una falla (PIL ausente, scroll del grid no funciona, diálogo Propiedades no abre), se anota como "no disponible" en la hoja IPE y se sigue.
 
-### Mapeo del flujo (6 pasos)
+### Mapeo del flujo (7 etapas)
 
 | # | Función | Acciones SAP / Python |
 |---|---|---|
 | 1 | `abrir_transaccion_sox` | maximize + okcd="AR15" + Enter. Fallback: `tree.doubleClickNode("F00039")` |
-| 2a | `ingresar_parametros` | `P_BUKRS.text = sociedad` |
+| 2a | `ingresar_parametros` | `P_BUKRS.text = sociedad` (ya NO incluye F8 — se split para permitir captura) |
 | 2b | `_seleccionar_fecha_calendario` (Desde) | foco campo + caretPosition 0 + F4 → calendar.focusDate / selectionInterval con `yyyymmdd` |
 | 2c | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH |
-| 3 | `ingresar_parametros` | F8 (ejecuta el reporte) |
+| — | `_capturar_pantalla` | **Screenshot 1** (parámetros llenados, antes de F8) → `01_parametros_ingresados.png` en tempdir |
+| 3 | `ejecutar_reporte` | F8 (`tbar[1]/btn[8]`) — split de `ingresar_parametros` para permitir captura entre ambos |
+| — | `_scroll_grid_a_primero` + `_capturar_pantalla` | **Screenshot 2** del primer registro del grid |
+| — | `_scroll_grid_a_ultimo` + `_capturar_pantalla` | **Screenshot 3** del último registro (usa `grid.RowCount` y `firstVisibleRow`) |
 | 4 | `exportar_a_excel` → `_exportar_via_alv_grid` (default) o `_exportar_via_pc_list` | ALV: `&MB_EXPORT` + `&XXL` sobre `DOCS_GRID_SHELL` + `_rellenar_save_dialog(..., boton_ok_id="btn[11]")`. PC: `%PC` + manejo de variantes A/B/C del save-as + `_rellenar_save_dialog(..., boton_ok_id="btn[0]")`. Produce `SOX_{SOC}_{YYYYMMDD_HHMMSS}.xlsx` intermedio. |
-| 5 | `generar_xlsx_poblacion` (post-SAP, pure Python) | Lee el intermedio con openpyxl, copia su contenido (celda por celda, preservando `number_format` para que Fecha y Hora se vean como en SAP) a una nueva hoja `Original_SAP` y guarda como `Población_{SOC}_{FECHA_HASTA}.xlsx`. Si `EXPORT_METHOD=None`, este paso se omite. |
-| 6 | `generar_hoja_creados(poblacion)` (post-procesamiento, pure Python) | Abre el Población, lee `Original_SAP`, filtra filas con G == `*** creado ***`, parsea la columna D con `PATRON_AF` (formato `"AF <code>-<sub> <denom>"`) y produce una **segunda hoja `Creados`** con: filas 1-9 = bloque de observaciones (textos fijos del cliente), fila 10 = headers en bold (col L = `"PPE o Intangible"`), filas 11+ = datos con código/subnúmero como ints, denominación como texto. **Columnas K y L se escriben como fórmulas Excel en inglés (estándar OOXML)** que Excel-ES traduce a EXTRAE/SI al mostrar: K = `=MID(D{n},1,2)`, L = IF anidado con los 4 casos PPE/Intangible/Activo Construcción. Al abrir el archivo, las fórmulas se evalúan en vivo — modificar D recalcula K y L. Filas que pasan el filtro pero la col D no matchea el regex se loguean y omiten (no rompen el flujo). Es el **deliverable final** que devuelve `generar_reporte_sox`. |
+| — | `_capturar_pantalla` | **Screenshot 4** (status bar SAP con bytes exportados, tomada justo tras exportar_a_excel) |
+| — | `_capturar_propiedades_archivo` | **Screenshot 5** — abre el diálogo Propiedades de Windows vía `Shell.Application` COM, captura, y cierra con Escape (`user32.keybd_event(0x1B)`) |
+| 5 | `generar_xlsx_poblacion` (post-SAP, pure Python) | Lee el intermedio con openpyxl, copia su contenido (celda por celda, preservando `number_format` para que Fecha y Hora se vean como en SAP) a una nueva hoja `Original_SAP` y guarda como `Población_{SOC}_{FECHA_HASTA}.xlsx`. Si `EXPORT_METHOD=None`, este paso y los siguientes se omiten. |
+| 6 | `generar_hoja_creados(poblacion)` (post-procesamiento, pure Python) | Abre el Población, lee `Original_SAP`, filtra filas con G == `*** creado ***`, parsea la columna D con `PATRON_AF` y produce una **segunda hoja `Creados`** con observaciones (filas 1-9), headers en bold (fila 10), datos desde fila 11. Columnas K y L como fórmulas Excel en inglés (estándar OOXML, Excel-ES traduce a EXTRAE/SI). |
+| 7 | `generar_hoja_ipe(poblacion, screenshots_dir)` (paso final, pure Python) | Lee los 5 PNG del tempdir y los embebe en una **tercera hoja `IPE`** con título + descripción + imagen escalada a `IPE_IMAGE_MAX_WIDTH=1200px`. Soft-fail: capturas faltantes (porque PIL no estaba, el scroll falló, o el diálogo Propiedades no abrió) se anotan como "no disponible" pero el flujo continúa. Es el **deliverable final** que devuelve `generar_reporte_sox`. El tempdir se limpia automáticamente al salir del `with tempfile.TemporaryDirectory(...)`. |
 
 ### Helpers
 - `validar_sociedad` / `validar_fecha` / `validar_rango_fechas` / `validar_caracter_fecha` — validaciones puras, testeables sin SAP.
 - `_intentar_listar_nodos_arbol(tree)` — diagnóstico: enumera nodos del árbol SAP (`GetAllNodeKeys` + `GetNodeTextByKey`) cuando falla `doubleClickNode`. Mensaje de error sugiere descubrir la T-code real vía "Sistema → Estado".
 - Salida: dos archivos en `salida/`:
   - **Intermedio:** `SOX_{SOCIEDAD}_{YYYYMMDD_HHMMSS}.xlsx` (lo que SAP exportó).
-  - **Final / deliverable:** `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx` con **dos hojas**:
+  - **Final / deliverable:** `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx` con **tres hojas**:
     - `Original_SAP`: copia 1:1 del intermedio (preserva `number_format`).
-    - `Creados`: filas de `Original_SAP` filtradas por `G == "*** creado ***"`, con código/subnúmero/denominación parseados de la col D, + columnas K (prefijo del código como texto) y L (clasificación PPE/Intangible/Activo Construcción). Bloque de observaciones en filas 1-9. El handler GUI muestra este nombre al usuario.
+    - `Creados`: filas de `Original_SAP` filtradas por `G == "*** creado ***"`, con código/subnúmero/denominación parseados de la col D, + columnas K (prefijo del código como texto) y L (clasificación PPE/Intangible/Activo Construcción). Bloque de observaciones en filas 1-9.
+    - `IPE`: 5 capturas de pantalla embebidas (parámetros, primer registro, último registro, status bar con bytes, propiedades del archivo) como evidencia visual del proceso. El handler GUI muestra este nombre al usuario.
 
 ### CLI
 ```bash
@@ -192,7 +201,7 @@ Exit codes: 0 OK, 1 error (validación o SAP), 2 uso incorrecto.
 
 ### Distribución
 - `tests/test_main.py` (75): handlers GUI, extracción TSV, vista SOX como frame embebido (`ControlSoxDialogTest` verifica el ocultado del menú, exposición del botón Atrás, y reversión al menú; `GenerarReporteSoxHandlerTest` verifica que ambos botones Generar+Atrás se deshabilitan durante el worker).
-- `tests/test_sox_report.py` (95): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso Población) + `PatronAfRegexTest` (6 tests del parseo de col D) + `GenerarHojaCreadosTest` (16 tests del paso post-procesamiento: filter, parsing, estructura, K y L como fórmulas =MID/=IFS, replace idempotente, errores) + `GenerarReporteSoxTest` (verifica orden de los 6 pasos, paso a las funciones, `EXPORT_METHOD=None` salta tanto Población como Creados).
+- `tests/test_sox_report.py` (105): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso Población) + `PatronAfRegexTest` (6 tests del parseo de col D) + `GenerarHojaCreadosTest` (16 tests del paso post-procesamiento: filter, parsing, estructura, K y L como fórmulas =MID/=IF, replace idempotente, errores) + `EjecutarReporteTest` (2 tests del split de F8) + `GenerarHojaIpeTest` (8 tests de la hoja de evidencias: crear, embedding, soft-fail, replace, scaling) + `GenerarReporteSoxTest` (verifica orden de las 7 etapas incluyendo screenshots, paso a las funciones, `EXPORT_METHOD=None` salta Población/Creados/IPE).
 - `tests/test_sap_upload.py` (46): cada paso del flujo LSMW + `MainEntryPointTest`.
 
 ### Cómo ejecutar
@@ -254,5 +263,9 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 - **Columnas K y L en `Creados` son fórmulas Excel, no valores pre-calculados** — `=MID(D{n},1,2)` y `=IF(...IF(...IF(...)))` anidado. Razón: cliente lo pidió explícitamente; mantener fórmulas permite que un usuario que edite D manualmente vea K y L recalcular en Excel. openpyxl serializa strings que empiezan con `=` como fórmulas (`data_type='f'` en el XLSX). Como openpyxl NO evalúa fórmulas, los tests sólo pueden verificar el string de la fórmula — la lógica de clasificación se valida visualmente al abrir en Excel.
 - **Fórmulas en INGLÉS con `,` separador, NO en español** — el estándar OOXML del .xlsx exige nombres de funciones en inglés en el XML interno. Excel lee el XML, valida la sintaxis y TRADUCE al locale del usuario al mostrar (Excel-ES verá `EXTRAE` y `SI` en la barra de fórmulas). Escribir `EXTRAE`/`SI.CONJUNTO` directamente en el XML hace que Excel reporte el archivo como dañado ("Hemos encontrado un problema con contenido…"). Aprendido por la mala — la intuición de "openpyxl no traduce, escribe en español" estaba equivocada porque Excel valida el XML al abrirlo.
 - **Usamos `IF` anidado en vez de `IFS`** — `IFS` es "future function" (Excel 2016+) y necesita prefijo `_xlfn.IFS` para ser válido en el XML. `IF` es universal y no requiere ningún prefijo, evitando esa fuente de bugs.
+- **Las capturas de pantalla (IPE) son soft-fail** — si PIL no está, el grid no expone `RowCount`, o el diálogo Propiedades de Windows no abre, la captura se omite y se anota como "no disponible" en la hoja IPE. El flujo SOX nunca se rompe por una evidencia fallida. `generar_hoja_ipe` devuelve `{embedded, missing, missing_names}` para diagnóstico.
+- **Las 5 capturas viven en un `tempfile.TemporaryDirectory`** — se generan durante el flujo SAP, se embeben en la hoja IPE del Población al final, y el tempdir se borra automáticamente al salir del `with`. Los PNG sueltos nunca se exponen al usuario; el deliverable es self-contained.
+- **`_capturar_propiedades_archivo` cierra el diálogo con ESC vía `ctypes.user32.keybd_event`** — abrir Propiedades es síncrono via `Shell.Application.NameSpace().ParseName().InvokeVerb("Properties")`, pero el diálogo es modal y no se cierra solo. Sin el ESC, el siguiente flujo SAP quedaría bloqueado. Alternativa rechazada: usar `pyautogui.press("escape")` añade una dep adicional cuando `ctypes` ya viene en stdlib.
+- **`ingresar_parametros` y `ejecutar_reporte` están separadas** — split necesario para capturar el screenshot del estado del formulario ANTES de F8. Antes era una sola función con `_log("Paso 2/4")` + F8 al final.
 - **Columna K usa `number_format="@"` como refuerzo declarativo** — `MID` siempre devuelve texto, así que el formato es redundante para el valor evaluado. Pero asegura que si alguien sobrescribe la fórmula con un valor pegado (ej. "08"), Excel siga interpretándolo como texto y no convierta a 8.
 - **`generar_hoja_creados` usa openpyxl puro (no pandas)** — para no añadir una dependencia pesada (~50 MB) por una sola función. Para 500k filas en normal mode toma ~30-60 segundos pero es aceptable como paso síncrono del worker. Si la performance se vuelve un problema, evaluar `read_only=True` para la lectura + dos pasadas (read en read_only, write en normal); o añadir pandas como dependencia opcional.

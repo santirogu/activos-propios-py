@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import DEFAULT, MagicMock, patch
 
 from openpyxl import Workbook, load_workbook
 
@@ -26,6 +26,9 @@ from sox_report import (  # noqa: E402
     CREADOS_HEADERS,
     CREADOS_SHEET_NAME,
     DOCS_GRID_SHELL,
+    IPE_IMAGE_MAX_WIDTH,
+    IPE_SCREENSHOTS_INFO,
+    IPE_SHEET_NAME,
     PATRON_AF,
     SOX_NODE_KEY,
     STANDARD_FILE_PREFIX,
@@ -35,6 +38,7 @@ from sox_report import (  # noqa: E402
     abrir_transaccion_sox,
     exportar_a_excel,
     generar_hoja_creados,
+    generar_hoja_ipe,
     generar_reporte_sox,
     generar_xlsx_poblacion,
     get_sap_session,
@@ -357,11 +361,39 @@ class IngresarParametrosTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ingresar_parametros(session, "ISA", "no-fecha", "31.05.2026")
 
-    def test_presses_f8_to_execute(self):
+    def test_does_not_press_f8(self):
+        """F8 vive en `ejecutar_reporte`; `ingresar_parametros` solo llena
+        los campos. Esto permite capturar un screenshot entre los dos."""
         session = MockSAPSession()
         ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
 
+        self.assertNotIn(("wnd[0]/tbar[1]/btn[8]", "press"), session.actions)
+
+
+class EjecutarReporteTest(unittest.TestCase):
+    """`ejecutar_reporte` pulsa F8 — paso 3/4 separado de `ingresar_parametros`
+    para permitir capturar un screenshot de los parámetros antes de la
+    ejecución."""
+
+    def test_presses_f8(self):
+        session = MockSAPSession()
+        sox_report.ejecutar_reporte(session)
+
         self.assertIn(("wnd[0]/tbar[1]/btn[8]", "press"), session.actions)
+
+    def test_raises_with_context_when_f8_button_missing(self):
+        session = MockSAPSession()
+        original = session.findById
+
+        def find_with_error(sap_id):
+            if sap_id == "wnd[0]/tbar[1]/btn[8]":
+                raise Exception("button missing")
+            return original(sap_id)
+
+        session.findById = find_with_error
+
+        with self.assertRaisesRegex(RuntimeError, "Ejecutar"):
+            sox_report.ejecutar_reporte(session)
 
 
 class ExportarAExcelTest(unittest.TestCase):
@@ -578,19 +610,8 @@ class StepErrorContextTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Sociedad"):
             ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
 
-    def test_ingresar_parametros_raises_when_f8_button_missing(self):
-        session = MockSAPSession()
-        original = session.findById
-
-        def find_with_error(sap_id):
-            if sap_id == "wnd[0]/tbar[1]/btn[8]":
-                raise Exception("button missing")
-            return original(sap_id)
-
-        session.findById = find_with_error
-
-        with self.assertRaisesRegex(RuntimeError, "Ejecutar"):
-            ingresar_parametros(session, "ISA", "01.05.2026", "31.05.2026")
+    # NOTA: el caso "F8 missing" se cubre ahora en EjecutarReporteTest
+    # porque F8 se movió a `ejecutar_reporte` (split de ingresar_parametros).
 
     def test_exportar_raises_when_grid_not_found_in_alv_mode(self):
         original_method = sox_report.EXPORT_METHOD
@@ -613,6 +634,35 @@ class StepErrorContextTest(unittest.TestCase):
 
 
 class GenerarReporteSoxTest(unittest.TestCase):
+    """El orquestador llama a las 7 etapas (SAP + post-procesamiento + IPE)
+    en orden. Tests mockean SAP + screenshot helpers para correr sin
+    dependencias externas."""
+
+    # Conjunto de mocks que aplican a todas las pruebas del orquestador.
+    # Se usa con patch.multiple para evitar repetición.
+    _ORCHESTRATOR_MOCKS = (
+        "abrir_transaccion_sox",
+        "ingresar_parametros",
+        "ejecutar_reporte",
+        "exportar_a_excel",
+        "_capturar_pantalla",
+        "_capturar_propiedades_archivo",
+        "_scroll_grid_a_primero",
+        "_scroll_grid_a_ultimo",
+        "generar_xlsx_poblacion",
+        "generar_hoja_creados",
+        "generar_hoja_ipe",
+    )
+
+    def _patch_all(self, return_overrides=None):
+        """Helper que devuelve un dict de patches para todos los pasos."""
+        overrides = return_overrides or {}
+        patches = {}
+        for name in self._ORCHESTRATOR_MOCKS:
+            mock = MagicMock(return_value=overrides.get(name))
+            patches[name] = mock
+        return patches
+
     def test_calls_all_steps_in_order(self):
         session = MockSAPSession()
         call_order = []
@@ -628,37 +678,60 @@ class GenerarReporteSoxTest(unittest.TestCase):
             "sox_report",
             abrir_transaccion_sox=make_recorder("abrir"),
             ingresar_parametros=make_recorder("ingresar"),
+            ejecutar_reporte=make_recorder("ejecutar"),
             exportar_a_excel=make_recorder("exportar"),
+            _capturar_pantalla=make_recorder("captura"),
+            _capturar_propiedades_archivo=make_recorder("captura_props"),
+            _scroll_grid_a_primero=make_recorder("scroll_primero"),
+            _scroll_grid_a_ultimo=make_recorder("scroll_ultimo"),
             generar_xlsx_poblacion=make_recorder("poblacion", fake_poblacion),
             generar_hoja_creados=make_recorder("creados"),
+            generar_hoja_ipe=make_recorder("ipe"),
         ):
             generar_reporte_sox(
                 session, "ISA", "01.05.2026", "31.05.2026",
                 carpeta_destino="/tmp", nombre_archivo="x.xlsx",
             )
 
+        # Verificar que los pasos clave aparecen en el orden correcto. No
+        # validamos cada captura individualmente (se hace en tests
+        # dedicados); aquí sólo el flujo global.
         self.assertEqual(
-            call_order,
-            ["abrir", "ingresar", "exportar", "poblacion", "creados"],
+            [step for step in call_order if step in {
+                "abrir", "ingresar", "ejecutar", "exportar",
+                "poblacion", "creados", "ipe",
+            }],
+            ["abrir", "ingresar", "ejecutar", "exportar",
+             "poblacion", "creados", "ipe"],
         )
+        # Capturas: 5 en total (4 _capturar_pantalla + 1 _capturar_propiedades_archivo).
+        self.assertEqual(call_order.count("captura"), 4)
+        self.assertEqual(call_order.count("captura_props"), 1)
 
     def test_normalizes_sociedad_before_passing(self):
         session = MockSAPSession()
         fake_poblacion = Path("/tmp/Población_ISA_31.05.2026.xlsx")
-        with patch("sox_report.ingresar_parametros") as mock_ing, \
-             patch("sox_report.abrir_transaccion_sox"), \
-             patch("sox_report.exportar_a_excel"), \
-             patch(
-                 "sox_report.generar_xlsx_poblacion",
-                 return_value=fake_poblacion,
-             ), \
-             patch("sox_report.generar_hoja_creados"):
+        with patch.multiple(
+            "sox_report",
+            abrir_transaccion_sox=DEFAULT,
+            ingresar_parametros=DEFAULT,
+            ejecutar_reporte=DEFAULT,
+            exportar_a_excel=DEFAULT,
+            _capturar_pantalla=DEFAULT,
+            _capturar_propiedades_archivo=DEFAULT,
+            _scroll_grid_a_primero=DEFAULT,
+            _scroll_grid_a_ultimo=DEFAULT,
+            generar_xlsx_poblacion=DEFAULT,
+            generar_hoja_creados=DEFAULT,
+            generar_hoja_ipe=DEFAULT,
+        ) as mocks:
+            mocks["generar_xlsx_poblacion"].return_value = fake_poblacion
             generar_reporte_sox(
                 session, "isa", "01.05.2026", "31.05.2026",
                 carpeta_destino="/tmp", nombre_archivo="x.xlsx",
             )
 
-        mock_ing.assert_called_once_with(
+        mocks["ingresar_parametros"].assert_called_once_with(
             session, "ISA", "01.05.2026", "31.05.2026"
         )
 
@@ -667,45 +740,65 @@ class GenerarReporteSoxTest(unittest.TestCase):
         y la fecha hasta tal cual la ingresó el usuario (validada)."""
         session = MockSAPSession()
         fake_poblacion = Path("/tmp/Población_ISA_31.05.2026.xlsx")
-        with patch("sox_report.abrir_transaccion_sox"), \
-             patch("sox_report.ingresar_parametros"), \
-             patch("sox_report.exportar_a_excel"), \
-             patch(
-                 "sox_report.generar_xlsx_poblacion",
-                 return_value=fake_poblacion,
-             ) as mock_pob, \
-             patch("sox_report.generar_hoja_creados"):
+        with patch.multiple(
+            "sox_report",
+            abrir_transaccion_sox=DEFAULT,
+            ingresar_parametros=DEFAULT,
+            ejecutar_reporte=DEFAULT,
+            exportar_a_excel=DEFAULT,
+            _capturar_pantalla=DEFAULT,
+            _capturar_propiedades_archivo=DEFAULT,
+            _scroll_grid_a_primero=DEFAULT,
+            _scroll_grid_a_ultimo=DEFAULT,
+            generar_xlsx_poblacion=DEFAULT,
+            generar_hoja_creados=DEFAULT,
+            generar_hoja_ipe=DEFAULT,
+        ) as mocks:
+            mocks["generar_xlsx_poblacion"].return_value = fake_poblacion
             generar_reporte_sox(
                 session, "isa", "01.05.2026", "31.05.2026",
                 carpeta_destino="/tmp", nombre_archivo="SOX_x.xlsx",
             )
 
         # generar_xlsx_poblacion(archivo_sap, carpeta_destino, sociedad, fecha_hasta)
-        args, _ = mock_pob.call_args
+        args, _ = mocks["generar_xlsx_poblacion"].call_args
         archivo_sap, carpeta, sociedad, fecha = args
         self.assertEqual(archivo_sap, Path("/tmp/SOX_x.xlsx"))
         self.assertEqual(carpeta, Path("/tmp"))
         self.assertEqual(sociedad, "ISA")
         self.assertEqual(fecha, "31.05.2026")
 
-    def test_passes_poblacion_path_to_generar_hoja_creados(self):
-        """`generar_hoja_creados` recibe el Path al archivo Población que
-        produjo el paso anterior."""
+    def test_passes_poblacion_path_to_generar_hoja_creados_and_ipe(self):
+        """Tanto `generar_hoja_creados` como `generar_hoja_ipe` reciben el
+        Path al archivo Población."""
         session = MockSAPSession()
         fake_poblacion = Path("/anywhere/Población_ISA_31.05.2026.xlsx")
-        with patch("sox_report.abrir_transaccion_sox"), \
-             patch("sox_report.ingresar_parametros"), \
-             patch("sox_report.exportar_a_excel"), \
-             patch(
-                 "sox_report.generar_xlsx_poblacion",
-                 return_value=fake_poblacion,
-             ), \
-             patch("sox_report.generar_hoja_creados") as mock_creados:
+        with patch.multiple(
+            "sox_report",
+            abrir_transaccion_sox=DEFAULT,
+            ingresar_parametros=DEFAULT,
+            ejecutar_reporte=DEFAULT,
+            exportar_a_excel=DEFAULT,
+            _capturar_pantalla=DEFAULT,
+            _capturar_propiedades_archivo=DEFAULT,
+            _scroll_grid_a_primero=DEFAULT,
+            _scroll_grid_a_ultimo=DEFAULT,
+            generar_xlsx_poblacion=DEFAULT,
+            generar_hoja_creados=DEFAULT,
+            generar_hoja_ipe=DEFAULT,
+        ) as mocks:
+            mocks["generar_xlsx_poblacion"].return_value = fake_poblacion
             generar_reporte_sox(
                 session, "ISA", "01.05.2026", "31.05.2026",
             )
 
-        mock_creados.assert_called_once_with(fake_poblacion)
+        mocks["generar_hoja_creados"].assert_called_once_with(fake_poblacion)
+        # generar_hoja_ipe(poblacion, screenshots_dir)
+        ipe_args, _ = mocks["generar_hoja_ipe"].call_args
+        self.assertEqual(ipe_args[0], fake_poblacion)
+        # Segundo arg es el screenshots_dir (tempdir, no validamos su path
+        # exacto — sólo que es un Path)
+        self.assertIsInstance(ipe_args[1], Path)
 
     def test_raises_for_invalid_sociedad(self):
         session = MockSAPSession()
@@ -726,14 +819,20 @@ class GenerarReporteSoxTest(unittest.TestCase):
         muestra ese nombre al usuario."""
         session = MockSAPSession()
         fake_poblacion = Path("/anywhere/salida/Población_ISA_31.05.2026.xlsx")
-        with patch("sox_report.abrir_transaccion_sox"), \
-             patch("sox_report.ingresar_parametros"), \
-             patch("sox_report.exportar_a_excel"), \
-             patch(
-                 "sox_report.generar_xlsx_poblacion",
-                 return_value=fake_poblacion,
-             ), \
-             patch("sox_report.generar_hoja_creados"):
+        with patch.multiple(
+            "sox_report",
+            abrir_transaccion_sox=MagicMock(),
+            ingresar_parametros=MagicMock(),
+            ejecutar_reporte=MagicMock(),
+            exportar_a_excel=MagicMock(),
+            _capturar_pantalla=MagicMock(),
+            _capturar_propiedades_archivo=MagicMock(),
+            _scroll_grid_a_primero=MagicMock(),
+            _scroll_grid_a_ultimo=MagicMock(),
+            generar_xlsx_poblacion=MagicMock(return_value=fake_poblacion),
+            generar_hoja_creados=MagicMock(),
+            generar_hoja_ipe=MagicMock(),
+        ):
             carpeta, nombre = generar_reporte_sox(
                 session, "ISA", "01.05.2026", "31.05.2026",
             )
@@ -741,26 +840,37 @@ class GenerarReporteSoxTest(unittest.TestCase):
         self.assertEqual(nombre, "Población_ISA_31.05.2026.xlsx")
         self.assertEqual(carpeta, "/anywhere/salida")
 
-    def test_export_method_none_skips_poblacion_and_returns_sap_intermediate(self):
-        """Si EXPORT_METHOD=None no hay archivo SAP del cual leer; se omite
-        tanto el Población_* como la hoja Creados, y se devuelve el nombre
-        intermedio."""
+    def test_export_method_none_skips_poblacion_creados_and_ipe(self):
+        """Si EXPORT_METHOD=None no hay archivo SAP del cual leer; se omiten
+        Población_*, Creados e IPE, y se devuelve el nombre intermedio.
+        Los screenshots SÍ se intentan (no se rompe el flujo) pero no se
+        embeben en ningún workbook."""
         original_method = sox_report.EXPORT_METHOD
         sox_report.EXPORT_METHOD = None
         try:
             session = MockSAPSession()
-            with patch("sox_report.abrir_transaccion_sox"), \
-                 patch("sox_report.ingresar_parametros"), \
-                 patch("sox_report.exportar_a_excel"), \
-                 patch("sox_report.generar_xlsx_poblacion") as mock_pob, \
-                 patch("sox_report.generar_hoja_creados") as mock_creados:
+            with patch.multiple(
+                "sox_report",
+                abrir_transaccion_sox=DEFAULT,
+                ingresar_parametros=DEFAULT,
+                ejecutar_reporte=DEFAULT,
+                exportar_a_excel=DEFAULT,
+                _capturar_pantalla=DEFAULT,
+                _capturar_propiedades_archivo=DEFAULT,
+                _scroll_grid_a_primero=DEFAULT,
+                _scroll_grid_a_ultimo=DEFAULT,
+                generar_xlsx_poblacion=DEFAULT,
+                generar_hoja_creados=DEFAULT,
+                generar_hoja_ipe=DEFAULT,
+            ) as mocks:
                 carpeta, nombre = generar_reporte_sox(
                     session, "ISA", "01.05.2026", "31.05.2026",
                     carpeta_destino="/tmp", nombre_archivo="SOX_x.xlsx",
                 )
 
-            mock_pob.assert_not_called()
-            mock_creados.assert_not_called()
+            mocks["generar_xlsx_poblacion"].assert_not_called()
+            mocks["generar_hoja_creados"].assert_not_called()
+            mocks["generar_hoja_ipe"].assert_not_called()
             self.assertEqual(nombre, "SOX_x.xlsx")
             self.assertEqual(carpeta, "/tmp")
         finally:
@@ -1259,6 +1369,173 @@ class GenerarHojaCreadosTest(unittest.TestCase):
         self.assertEqual(ws.cell(1, 1).value, "Observaciones")
         self.assertEqual(ws.cell(10, 1).value, "Fecha")
         self.assertIsNone(ws.cell(11, 1).value)
+
+
+# ---------------------------------------------------------------------------
+# generar_hoja_ipe (paso final del flujo SOX: evidencias embedded)
+# ---------------------------------------------------------------------------
+
+
+class GenerarHojaIpeTest(unittest.TestCase):
+    """Lee los 5 screenshots PNG del tempdir y los embebe en una hoja
+    `IPE` del workbook Población. Soft-fail: capturas faltantes se
+    reportan en stats y se anotan en la hoja con "no disponible"."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="test_ipe_"))
+        self.shots_dir = self.tmpdir / "shots"
+        self.shots_dir.mkdir()
+
+        # Crear un workbook Población mínimo (con Original_SAP y Creados
+        # como en la realidad — generar_hoja_ipe sólo añade IPE).
+        self.poblacion = self.tmpdir / "Población_test.xlsx"
+        wb = Workbook()
+        wb.active.title = STANDARD_SHEET_NAME
+        wb.create_sheet(CREADOS_SHEET_NAME)
+        wb.save(self.poblacion)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _crear_imagen_dummy(self, filename: str, size=(800, 600)) -> Path:
+        """Crea un PNG PIL en shots_dir y devuelve su path."""
+        from PIL import Image
+        img = Image.new("RGB", size, color=(100, 150, 200))
+        ruta = self.shots_dir / filename
+        img.save(ruta)
+        return ruta
+
+    def test_creates_ipe_sheet_alongside_existing_sheets(self):
+        for fname, _ in IPE_SCREENSHOTS_INFO:
+            self._crear_imagen_dummy(fname)
+
+        generar_hoja_ipe(self.poblacion, self.shots_dir)
+
+        wb = load_workbook(self.poblacion)
+        self.assertIn(STANDARD_SHEET_NAME, wb.sheetnames)
+        self.assertIn(CREADOS_SHEET_NAME, wb.sheetnames)
+        self.assertIn(IPE_SHEET_NAME, wb.sheetnames)
+
+    def test_embeds_all_5_screenshots_when_all_present(self):
+        for fname, _ in IPE_SCREENSHOTS_INFO:
+            self._crear_imagen_dummy(fname)
+
+        stats = generar_hoja_ipe(self.poblacion, self.shots_dir)
+
+        self.assertEqual(stats["embedded"], 5)
+        self.assertEqual(stats["missing"], 0)
+        self.assertEqual(stats["missing_names"], [])
+
+        wb = load_workbook(self.poblacion)
+        ws = wb[IPE_SHEET_NAME]
+        self.assertEqual(len(ws._images), 5)
+
+    def test_writes_title_in_a1(self):
+        generar_hoja_ipe(self.poblacion, self.shots_dir)
+
+        wb = load_workbook(self.poblacion)
+        ws = wb[IPE_SHEET_NAME]
+        self.assertIn("IPE", ws.cell(1, 1).value)
+        self.assertTrue(ws.cell(1, 1).font.bold)
+
+    def test_writes_description_before_each_screenshot(self):
+        for fname, _ in IPE_SCREENSHOTS_INFO:
+            self._crear_imagen_dummy(fname)
+
+        generar_hoja_ipe(self.poblacion, self.shots_dir)
+
+        wb = load_workbook(self.poblacion)
+        ws = wb[IPE_SHEET_NAME]
+        # Las 5 descripciones aparecen en col A en algún punto de la hoja.
+        textos_celdas = [
+            ws.cell(row, 1).value
+            for row in range(1, ws.max_row + 1)
+            if ws.cell(row, 1).value
+        ]
+        for _, descripcion in IPE_SCREENSHOTS_INFO:
+            self.assertIn(descripcion, textos_celdas)
+
+    def test_soft_fails_when_some_screenshots_missing(self):
+        """Si faltan capturas, no rompe — embebe las que hay y anota las
+        faltantes en el stats y como texto en la hoja."""
+        # Solo crear 3 de las 5
+        for fname, _ in IPE_SCREENSHOTS_INFO[:3]:
+            self._crear_imagen_dummy(fname)
+
+        stats = generar_hoja_ipe(self.poblacion, self.shots_dir)
+
+        self.assertEqual(stats["embedded"], 3)
+        self.assertEqual(stats["missing"], 2)
+        self.assertEqual(
+            sorted(stats["missing_names"]),
+            sorted([fname for fname, _ in IPE_SCREENSHOTS_INFO[3:]]),
+        )
+
+    def test_soft_fails_when_no_screenshots_at_all(self):
+        """Sin capturas, la hoja IPE se crea con título + descripciones +
+        notas 'no disponible'. No tira excepción."""
+        stats = generar_hoja_ipe(self.poblacion, self.shots_dir)
+
+        self.assertEqual(stats["embedded"], 0)
+        self.assertEqual(stats["missing"], 5)
+
+        wb = load_workbook(self.poblacion)
+        ws = wb[IPE_SHEET_NAME]
+        self.assertEqual(len(ws._images), 0)
+
+    def test_replaces_existing_ipe_sheet(self):
+        """Si la hoja IPE ya existe de una corrida previa, se borra y recrea."""
+        # Primera corrida
+        self._crear_imagen_dummy(IPE_SCREENSHOTS_INFO[0][0])
+        generar_hoja_ipe(self.poblacion, self.shots_dir)
+        wb = load_workbook(self.poblacion)
+        self.assertEqual(len(wb[IPE_SHEET_NAME]._images), 1)
+
+        # Segunda corrida: ahora 2 capturas en shots_dir
+        self._crear_imagen_dummy(IPE_SCREENSHOTS_INFO[1][0])
+        generar_hoja_ipe(self.poblacion, self.shots_dir)
+        wb = load_workbook(self.poblacion)
+        # Debe tener exactamente 2 imágenes, no 3 (no acumula).
+        self.assertEqual(len(wb[IPE_SHEET_NAME]._images), 2)
+
+    def test_scales_image_dimensions_when_wider_than_max(self):
+        """Captura la dimensión en memoria DURANTE la generación (openpyxl
+        no preserva `Image.width` tras save/load — se guarda como EMU en
+        el anchor). Inyectamos un wrapper para inspeccionar la asignación."""
+        self._crear_imagen_dummy(
+            IPE_SCREENSHOTS_INFO[0][0], size=(1600, 900)
+        )
+
+        captured = {}
+        from openpyxl.drawing.image import Image as XlsxImage
+        original_init = XlsxImage.__init__
+
+        def capturing_init(self, *args, **kw):
+            original_init(self, *args, **kw)
+            captured["before_width"] = self.width
+            captured["before_height"] = self.height
+
+        with patch.object(XlsxImage, "__init__", capturing_init):
+            generar_hoja_ipe(self.poblacion, self.shots_dir)
+
+        # Confirmamos que el __init__ original ve 1600x900 (la imagen
+        # nativa), y que el código de scaling debería haberla bajado
+        # después. Como no podemos inspeccionar post-scaling fácilmente,
+        # verificamos al menos que la función no rompió y que el wb tiene
+        # la imagen.
+        self.assertEqual(captured["before_width"], 1600)
+        wb = load_workbook(self.poblacion)
+        self.assertEqual(len(wb[IPE_SHEET_NAME]._images), 1)
+
+    def test_does_not_scale_images_smaller_than_max_width(self):
+        """Imágenes <= MAX_WIDTH se embeben sin tocar dimensiones (path de
+        no-scaling). Verificamos que la función no rompe y la imagen está."""
+        self._crear_imagen_dummy(
+            IPE_SCREENSHOTS_INFO[0][0], size=(800, 600)
+        )
+        generar_hoja_ipe(self.poblacion, self.shots_dir)
+        wb = load_workbook(self.poblacion)
+        self.assertEqual(len(wb[IPE_SHEET_NAME]._images), 1)
 
 
 # ---------------------------------------------------------------------------

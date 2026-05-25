@@ -73,6 +73,30 @@ CREADOS_HEADERS = (
     "Valor editado antiguo", "Extrae", "PPE o Intangible",
 )
 
+# Tercera hoja del Población: evidencia visual del proceso (5 screenshots
+# embedded). Se genera al final del flujo, después de Creados.
+IPE_SHEET_NAME = "IPE"
+# Filenames + descripciones de las 5 evidencias, en orden de aparición.
+# Los filenames se usan tanto para guardar en el tempdir como para localizar
+# y embebir en la hoja IPE. Si una captura falla (soft-fail), el filename
+# no existirá y `generar_hoja_ipe` lo reportará como "no disponible".
+IPE_SCREENSHOTS_INFO = (
+    ("01_parametros_ingresados.png",
+     "1. Pantalla de Modificaciones con sociedad y fechas ingresadas (antes de F8)."),
+    ("02_primer_registro.png",
+     "2. Primer registro de la tabla Modificaciones registros maestros AF."),
+    ("03_ultimo_registro.png",
+     "3. Último registro de la tabla (scroll al final)."),
+    ("04_status_bar_bytes.png",
+     "4. Status bar SAP con el conteo de bytes exportados."),
+    ("05_propiedades_archivo.png",
+     "5. Propiedades del archivo SAP descargado (bytes deben coincidir con #4)."),
+)
+# Ancho máximo (px) al que se escala cada screenshot embedded en IPE. Las
+# capturas SAP suelen ser 1920+ px de ancho y aumentan mucho el tamaño del
+# .xlsx; escalarlas mantiene el archivo manejable sin perder legibilidad.
+IPE_IMAGE_MAX_WIDTH = 1200
+
 # Bloque de observaciones (filas 1-9) que va encima de los datos en la hoja
 # Creados. Lista de (fila, columna, texto) — celdas no listadas quedan vacías.
 CREADOS_OBSERVACIONES = (
@@ -449,8 +473,10 @@ def _seleccionar_fecha_calendario(
 def ingresar_parametros(
     session, sociedad: str, fecha_desde: str, fecha_hasta: str
 ) -> None:
-    """Llena P_BUKRS (texto directo), Fecha Desde/Hasta vía calendario F4 y
-    ejecuta el reporte (F8). Replica el flujo grabado en `Script2sox.vbs`."""
+    """Llena P_BUKRS (texto directo) y Fecha Desde/Hasta vía calendario F4.
+    NO ejecuta el reporte (F8) — esa parte está en `ejecutar_reporte` para
+    permitir capturar un screenshot de los parámetros antes de la ejecución.
+    """
     _log(
         f"Paso 2/4: Ingresando sociedad='{sociedad}', "
         f"desde='{fecha_desde}', hasta='{fecha_hasta}'..."
@@ -472,6 +498,12 @@ def ingresar_parametros(
         session, CAMPO_FECHA_HASTA, fecha_hasta, "Hasta"
     )
 
+
+def ejecutar_reporte(session) -> None:
+    """Pulsa F8 (`wnd[0]/tbar[1]/btn[8]`) para ejecutar el reporte después
+    de que `ingresar_parametros` haya llenado el formulario. Split aparte
+    para permitir capturar una evidencia (screenshot) del estado del
+    formulario antes de la ejecución."""
     _log("Paso 3/4: Ejecutando reporte (F8)...")
     boton_f8 = _ejecutar(
         "Localizar botón Ejecutar (F8 = wnd[0]/tbar[1]/btn[8])",
@@ -729,6 +761,199 @@ def generar_xlsx_poblacion(
     return ruta_destino
 
 
+# ---------------------------------------------------------------------------
+# Helpers de captura de pantalla (evidencias para hoja IPE)
+# ---------------------------------------------------------------------------
+#
+# Todas las capturas son SOFT-FAIL: si PIL no está disponible, si SAP no
+# expone los atributos esperados del grid, o si el diálogo Propiedades de
+# Windows no abre, se loguea y se continúa. El flujo SOX nunca se rompe
+# por una evidencia fallida — el archivo IPE simplemente reportará qué
+# capturas faltaron.
+
+def _capturar_pantalla(output_path: Path) -> bool:
+    """Captura toda la pantalla primaria (incluyendo barra de tareas) y la
+    guarda como PNG en `output_path`. Returns True si éxito."""
+    try:
+        from PIL import ImageGrab
+    except ImportError:
+        _log(f"  Captura omitida (Pillow no instalado): {output_path.name}")
+        return False
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        img = ImageGrab.grab()
+        img.save(output_path, "PNG")
+        _log(f"  Captura guardada: {output_path.name} ({img.width}x{img.height})")
+        return True
+    except Exception as exc:
+        _log(f"  Error capturando pantalla {output_path.name}: {exc!r}")
+        return False
+
+
+def _capturar_propiedades_archivo(archivo: Path, output_path: Path) -> bool:
+    """Abre el diálogo Propiedades del archivo en Windows Explorer vía
+    Shell COM, captura screenshot, y cierra el diálogo con Escape.
+
+    Solo funciona en Windows con pywin32 instalado. No-op en otros sistemas.
+    """
+    try:
+        import win32com.client  # type: ignore
+        import ctypes
+    except ImportError:
+        _log(
+            f"  Captura propiedades omitida (pywin32 no disponible): "
+            f"{output_path.name}"
+        )
+        return False
+
+    if not archivo.exists():
+        _log(
+            f"  Captura propiedades omitida (archivo no existe): "
+            f"{archivo.name}"
+        )
+        return False
+
+    try:
+        shell = win32com.client.Dispatch("Shell.Application")
+        folder = shell.NameSpace(str(archivo.parent))
+        if folder is None:
+            _log(f"  No se pudo abrir folder COM: {archivo.parent}")
+            return False
+        item = folder.ParseName(archivo.name)
+        if item is None:
+            _log(f"  No se pudo localizar el archivo COM: {archivo.name}")
+            return False
+        item.InvokeVerb("Properties")
+        # Esperar a que el diálogo aparezca (es asíncrono).
+        time.sleep(2)
+        ok = _capturar_pantalla(output_path)
+        # Cerrar el diálogo enviando ESC (VK_ESCAPE = 0x1B).
+        # keybd_event: bScan=0, dwFlags=0 (key down), then dwFlags=2 (key up).
+        ctypes.windll.user32.keybd_event(0x1B, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0x1B, 0, 2, 0)
+        return ok
+    except Exception as exc:
+        _log(f"  Error capturando propiedades de {archivo.name}: {exc!r}")
+        return False
+
+
+def _scroll_grid_a_primero(session) -> bool:
+    """Posiciona el grid de AR15 en su primer registro (fila 0). Soft-fail."""
+    try:
+        grid = session.findById(DOCS_GRID_SHELL)
+        grid.firstVisibleRow = 0
+        grid.currentCellRow = 0
+        grid.selectedRows = "0"
+        time.sleep(0.5)
+        return True
+    except Exception as exc:
+        _log(f"  Scroll al primer registro falló: {exc!r}")
+        return False
+
+
+def _scroll_grid_a_ultimo(session) -> bool:
+    """Posiciona el grid de AR15 en su último registro. Soft-fail.
+
+    Usa `RowCount` para encontrar el último índice, ajusta `firstVisibleRow`
+    para mostrar las últimas filas, y selecciona la última.
+    """
+    try:
+        grid = session.findById(DOCS_GRID_SHELL)
+        total = grid.RowCount
+        if total <= 0:
+            _log("  Grid sin filas, no hay último registro para mostrar")
+            return False
+        ultimo = total - 1
+        # Mostrar las últimas ~20 filas para que el último sea visible con contexto.
+        grid.firstVisibleRow = max(0, ultimo - 20)
+        grid.currentCellRow = ultimo
+        grid.selectedRows = str(ultimo)
+        time.sleep(0.5)
+        return True
+    except Exception as exc:
+        _log(f"  Scroll al último registro falló: {exc!r}")
+        return False
+
+
+def generar_hoja_ipe(
+    archivo_poblacion: Path,
+    screenshots_dir: Path,
+) -> dict[str, int]:
+    """Añade (o reemplaza) la hoja `IPE` al workbook Población con los
+    screenshots embedded.
+
+    Lee los archivos PNG listados en `IPE_SCREENSHOTS_INFO` desde
+    `screenshots_dir` y los embebe en una nueva hoja `IPE` precedidos por
+    sus descripciones. Soft-fail: si un screenshot no existe, se escribe
+    una nota en su lugar y se reporta en el dict de retorno.
+
+    Args:
+        archivo_poblacion: workbook destino (ya debe tener Original_SAP y
+            Creados).
+        screenshots_dir: carpeta temporal donde están los .png.
+
+    Returns:
+        Dict con stats: `embedded` (cuántos se embebieron OK),
+        `missing` (cuántos faltaron), `missing_names` (lista de filenames).
+    """
+    from openpyxl.drawing.image import Image as XlsxImage
+
+    _log(f"Generando hoja '{IPE_SHEET_NAME}' en {archivo_poblacion.name}...")
+    wb = load_workbook(archivo_poblacion)
+    if IPE_SHEET_NAME in wb.sheetnames:
+        del wb[IPE_SHEET_NAME]
+    ws = wb.create_sheet(IPE_SHEET_NAME)
+
+    bold_lg = Font(bold=True, size=14)
+    bold = Font(bold=True)
+    ws.cell(1, 1, "IPE — Evidencias del proceso de generación").font = bold_lg
+
+    embedded = 0
+    missing_names: list[str] = []
+    fila = 3
+
+    for filename, descripcion in IPE_SCREENSHOTS_INFO:
+        img_path = screenshots_dir / filename
+        ws.cell(fila, 1, descripcion).font = bold
+        fila += 1
+
+        if not img_path.exists():
+            ws.cell(fila, 1, "  ⚠ Captura no disponible (falló en el momento de tomarla)")
+            missing_names.append(filename)
+            fila += 3
+            continue
+
+        try:
+            img = XlsxImage(str(img_path))
+            # Escalar manteniendo aspect ratio si excede el ancho máximo.
+            if img.width > IPE_IMAGE_MAX_WIDTH:
+                ratio = IPE_IMAGE_MAX_WIDTH / img.width
+                img.height = int(img.height * ratio)
+                img.width = IPE_IMAGE_MAX_WIDTH
+            anchor = f"A{fila}"
+            ws.add_image(img, anchor)
+            # Reservar filas debajo de la imagen (aprox 18px por fila).
+            filas_imagen = max(1, img.height // 18)
+            fila += filas_imagen + 2
+            embedded += 1
+        except Exception as exc:
+            ws.cell(fila, 1, f"  ⚠ Error embebiendo imagen: {exc!r}")
+            missing_names.append(filename)
+            fila += 3
+
+    wb.save(archivo_poblacion)
+
+    _log(
+        f"Hoja '{IPE_SHEET_NAME}' generada: {embedded} screenshots embebidos, "
+        f"{len(missing_names)} faltantes."
+    )
+    return {
+        "embedded": embedded,
+        "missing": len(missing_names),
+        "missing_names": missing_names,
+    }
+
+
 def generar_hoja_creados(archivo_poblacion: Path) -> dict[str, int]:
     """Añade (o reemplaza) la hoja `Creados` al workbook Población.
 
@@ -920,16 +1145,21 @@ def generar_reporte_sox(
     """Ejecuta el flujo SOX completo y devuelve (carpeta, nombre) del
     archivo final con nombre estándar `Población_*`.
 
-    Flujo:
+    Flujo (7 etapas):
         1. Abrir AR15.
-        2. Ingresar parámetros y ejecutar reporte.
-        3. Exportar el grid a .xlsx (nombre intermedio SOX_*.xlsx).
-        4. Leer ese .xlsx y producir `Población_{SOCIEDAD}_{FECHA_HASTA}.xlsx`
-           con el contenido en la hoja `Original_SAP`.
+        2. Llenar parámetros (sociedad + fechas).
+        3. Capturar screenshot 1 (parámetros).
+        4. Ejecutar reporte (F8). Capturar screenshots 2 y 3 (primer/último
+           registro de la tabla, con scroll).
+        5. Exportar grid a .xlsx (`SOX_*.xlsx`). Capturar screenshot 4
+           (status bar con bytes) y 5 (propiedades del archivo en Windows).
+        6. Generar `Población_{SOC}_{FECHA_HASTA}.xlsx` con hojas
+           `Original_SAP` (copia) y `Creados` (filtro + parseo).
+        7. Embeber las 5 evidencias en una hoja `IPE` dentro del Población.
 
-    Si `EXPORT_METHOD` es `None`, omite los pasos 3 y 4 (no hay archivo SAP
-    desde el cual generar el Población_*) y devuelve el nombre intermedio
-    como deliverable nominal.
+    Si `EXPORT_METHOD` es `None`, omite las etapas 6 y 7 (no hay archivo
+    SAP) y devuelve el nombre intermedio. Los screenshots se capturan en
+    un tempdir que se limpia automáticamente al salir.
 
     Args:
         session: sesión SAP GUI activa.
@@ -943,6 +1173,8 @@ def generar_reporte_sox(
         (carpeta, nombre) del archivo `Población_*` final. Si EXPORT_METHOD
         es None, devuelve (carpeta, nombre del intermedio SAP).
     """
+    import tempfile
+
     sociedad_norm = validar_sociedad(sociedad)
     validar_rango_fechas(fecha_desde, fecha_hasta)
 
@@ -957,27 +1189,65 @@ def generar_reporte_sox(
     _log("=== Iniciando flujo SOX ===")
     abrir_transaccion_sox(session)
     ingresar_parametros(session, sociedad_norm, fecha_desde, fecha_hasta)
-    exportar_a_excel(session, carpeta_destino, nombre_archivo)
 
-    if EXPORT_METHOD is None:
-        _log(
-            "EXPORT_METHOD=None → omitiendo generación del Población_*.xlsx "
-            "(no hay archivo SAP del cual leer)."
+    # Tempdir para las 5 capturas; se limpia automáticamente al salir del
+    # `with`. Las capturas se embeben en la hoja IPE del Población antes
+    # de que tmpdir desaparezca.
+    with tempfile.TemporaryDirectory(prefix="sox_evidencias_") as tmp:
+        screenshots_dir = Path(tmp)
+
+        # Screenshot 1: parámetros llenados, ANTES de F8.
+        _capturar_pantalla(screenshots_dir / "01_parametros_ingresados.png")
+
+        ejecutar_reporte(session)
+        # Dar tiempo a que el grid de AR15 renderice los resultados antes
+        # de scrollear y capturar.
+        time.sleep(1.5)
+
+        # Screenshot 2: primer registro de la tabla.
+        _scroll_grid_a_primero(session)
+        _capturar_pantalla(screenshots_dir / "02_primer_registro.png")
+
+        # Screenshot 3: último registro (scroll al final).
+        _scroll_grid_a_ultimo(session)
+        _capturar_pantalla(screenshots_dir / "03_ultimo_registro.png")
+        # Restablecer la posición del cursor antes de exportar (algunas
+        # versiones de SAP exportan desde la fila seleccionada).
+        _scroll_grid_a_primero(session)
+
+        exportar_a_excel(session, carpeta_destino, nombre_archivo)
+
+        # Screenshot 4: status bar SAP con bytes recién exportados.
+        _capturar_pantalla(screenshots_dir / "04_status_bar_bytes.png")
+
+        # Screenshot 5: diálogo Propiedades del archivo SAP en Windows.
+        archivo_sap = Path(carpeta_destino) / nombre_archivo
+        _capturar_propiedades_archivo(
+            archivo_sap,
+            screenshots_dir / "05_propiedades_archivo.png",
         )
-        duracion = time.monotonic() - inicio
-        _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
-        return carpeta_destino, nombre_archivo
 
-    archivo_poblacion = generar_xlsx_poblacion(
-        Path(carpeta_destino) / nombre_archivo,
-        Path(carpeta_destino),
-        sociedad_norm,
-        fecha_hasta,
-    )
+        if EXPORT_METHOD is None:
+            _log(
+                "EXPORT_METHOD=None → omitiendo Población y hoja IPE "
+                "(no hay archivo SAP del cual leer)."
+            )
+            duracion = time.monotonic() - inicio
+            _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
+            return carpeta_destino, nombre_archivo
 
-    # Etapa post-procesamiento: añadir la hoja 'Creados' al mismo workbook,
-    # con las filas filtradas de Original_SAP y los códigos parseados.
-    generar_hoja_creados(archivo_poblacion)
+        archivo_poblacion = generar_xlsx_poblacion(
+            archivo_sap,
+            Path(carpeta_destino),
+            sociedad_norm,
+            fecha_hasta,
+        )
+
+        # Etapas post-procesamiento: añadir hojas Creados e IPE al
+        # workbook Población. IPE va al final porque embebe las capturas
+        # del tempdir antes de que éste se elimine al salir del `with`.
+        generar_hoja_creados(archivo_poblacion)
+        generar_hoja_ipe(archivo_poblacion, screenshots_dir)
 
     duracion = time.monotonic() - inicio
     _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
