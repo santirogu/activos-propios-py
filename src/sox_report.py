@@ -205,6 +205,52 @@ def _log(mensaje: str) -> None:
     print(f"[{ts}] {mensaje}", flush=True)
 
 
+def _archivo_esta_bloqueado(archivo: Path) -> bool:
+    """Detecta si un archivo está abierto en exclusiva por otro proceso
+    (típicamente Excel). Intenta abrirlo con modo `r+b` (lectura+escritura
+    binaria), que en Windows requiere acceso exclusivo que Excel bloquea.
+
+    Si el archivo no existe, devuelve False (no está bloqueado, está libre
+    para crear). Si existe y se puede abrir en r+b sin error → False.
+    Si lanza PermissionError u OSError → True.
+    """
+    if not archivo.exists():
+        return False
+    try:
+        with open(archivo, "r+b"):
+            pass
+        return False
+    except (PermissionError, OSError):
+        return True
+
+
+def _guardar_workbook_seguro(wb, archivo: Path) -> None:
+    """Wrapper de `wb.save(archivo)` que captura `PermissionError` y re-lanza
+    con un mensaje accionable. Sin esto, el usuario veía el `[Errno 13]
+    Permission denied` crudo de openpyxl y no era obvio que la causa era
+    el archivo abierto en Excel.
+    """
+    try:
+        wb.save(archivo)
+    except PermissionError as exc:
+        raise PermissionError(
+            f"No se pudo guardar {archivo.name}: el archivo está abierto "
+            f"en Excel (u otro proceso lo bloqueó). Por favor ciérralo y "
+            f"vuelve a generar el reporte SOX.\n\n"
+            f"Ruta: {archivo}"
+        ) from exc
+
+
+def _nombre_archivo_poblacion(sociedad_norm: str, fecha_hasta: str) -> str:
+    """Construye el nombre estándar del archivo Población final.
+    Compartido por `generar_xlsx_poblacion` (para nombrarlo al crearlo) y
+    `generar_reporte_sox` (para chequeo temprano de bloqueo)."""
+    fecha_norm = validar_fecha(fecha_hasta, etiqueta="fecha hasta").strftime(
+        DATE_FORMAT_USER
+    )
+    return f"{STANDARD_FILE_PREFIX}_{sociedad_norm}_{fecha_norm}.xlsx"
+
+
 def _ejecutar(descripcion: str, fn, *args, **kwargs):
     """Ejecuta `fn(*args, **kwargs)` loguenado la operación. Si falla,
     re-lanza con un mensaje descriptivo que dice exactamente qué intentaba
@@ -753,13 +799,10 @@ def generar_xlsx_poblacion(
             new_cell.number_format = cell.number_format
         rows_copiadas += 1
 
-    fecha_norm = validar_fecha(fecha_hasta, etiqueta="fecha hasta").strftime(
-        DATE_FORMAT_USER
-    )
-    nombre_archivo = f"{STANDARD_FILE_PREFIX}_{sociedad}_{fecha_norm}.xlsx"
+    nombre_archivo = _nombre_archivo_poblacion(sociedad, fecha_hasta)
     carpeta_destino.mkdir(parents=True, exist_ok=True)
     ruta_destino = carpeta_destino / nombre_archivo
-    wb_new.save(ruta_destino)
+    _guardar_workbook_seguro(wb_new, ruta_destino)
 
     _log(
         f"Generado: {ruta_destino.name} ({rows_copiadas} filas, "
@@ -1160,7 +1203,7 @@ def generar_hoja_ipe(
             missing_names.append(filename)
             fila += 3
 
-    wb.save(archivo_poblacion)
+    _guardar_workbook_seguro(wb, archivo_poblacion)
 
     _log(
         f"Hoja '{IPE_SHEET_NAME}' generada: {embedded} screenshots embebidos, "
@@ -1338,7 +1381,7 @@ def generar_hoja_creados(archivo_poblacion: Path) -> dict[str, int]:
             f'IF(K{fila_excel}="14","Activo Construcción","PPE")))'
         )
 
-    wb.save(archivo_poblacion)
+    _guardar_workbook_seguro(wb, archivo_poblacion)
 
     filas_escritas = len(filas_para_escribir)
     _log(
@@ -1403,6 +1446,21 @@ def generar_reporte_sox(
     if nombre_archivo is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         nombre_archivo = f"SOX_{sociedad_norm}_{ts}.xlsx"
+
+    # Chequeo temprano: si el Población predicho ya existe Y está abierto
+    # en Excel, abortar AHORA para no correr el flujo SAP completo (minutos)
+    # y fallar al final con `PermissionError` al intentar escribirlo.
+    archivo_poblacion_predicho = (
+        Path(carpeta_destino) / _nombre_archivo_poblacion(sociedad_norm, fecha_hasta)
+    )
+    if _archivo_esta_bloqueado(archivo_poblacion_predicho):
+        raise PermissionError(
+            f"El archivo {archivo_poblacion_predicho.name} ya existe y está "
+            f"abierto en Excel. Por favor ciérralo antes de generar el "
+            f"reporte SOX (de lo contrario el flujo SAP correrá inútilmente "
+            f"y fallará al guardar el resultado).\n\n"
+            f"Ruta: {archivo_poblacion_predicho}"
+        )
 
     inicio = time.monotonic()
     _log("=== Iniciando flujo SOX ===")
