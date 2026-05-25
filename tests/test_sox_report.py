@@ -1088,10 +1088,11 @@ class GenerarHojaCreadosTest(unittest.TestCase):
         self.assertEqual(ws.cell(11, 5).value, 0)        # subnúmero int
         self.assertEqual(ws.cell(11, 6).value, "Buje 500 kV-RV")
 
-    def test_column_k_is_extrae_formula_referencing_d_same_row(self):
-        """K debe ser una fórmula =EXTRAE(D{n};1;2) en español (no MID
-        inglés) — el Excel del cliente está en español y no interpreta las
-        funciones inglesas con `,` como separador."""
+    def test_column_k_is_mid_formula_referencing_d_same_row(self):
+        """K debe ser una fórmula =MID(D{n},1,2) en INGLÉS con `,` —
+        OOXML exige funciones en inglés; Excel-ES las muestra como EXTRAE
+        en la barra de fórmulas pero las guarda como MID en el XML.
+        Escribir en español directamente daña el archivo."""
         rows = [
             [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
              "USR", "AF 1900000-0 Test", "", "", CREADOS_FILTRO_VALOR, ""],
@@ -1104,15 +1105,15 @@ class GenerarHojaCreadosTest(unittest.TestCase):
         wb = load_workbook(poblacion)
         ws = wb[CREADOS_SHEET_NAME]
         # Cada fila tiene su propia fórmula referenciando D de la misma fila.
-        self.assertEqual(ws.cell(11, 11).value, "=EXTRAE(D11;1;2)")
-        self.assertEqual(ws.cell(12, 11).value, "=EXTRAE(D12;1;2)")
-        # number_format = "@" refuerza el tipo texto (EXTRAE ya lo garantiza).
+        self.assertEqual(ws.cell(11, 11).value, "=MID(D11,1,2)")
+        self.assertEqual(ws.cell(12, 11).value, "=MID(D12,1,2)")
+        # number_format = "@" refuerza el tipo texto (MID ya lo garantiza).
         self.assertEqual(ws.cell(11, 11).number_format, "@")
 
-    def test_column_l_is_si_conjunto_formula_referencing_k_same_row(self):
-        """L debe ser una fórmula =SI.CONJUNTO(...) en español (no IFS
-        inglés) con los 4 casos del cliente y `VERDADERO` como condición
-        default."""
+    def test_column_l_is_nested_if_formula_referencing_k_same_row(self):
+        """L debe ser =IF(...IF(...IF(...))) en inglés. Usamos IF anidado
+        en vez de IFS para evitar la complicación del prefijo `_xlfn.IFS`
+        que IFS requiere por ser 'future function'."""
         rows = [
             [datetime(2026, 3, 2), datetime(2026, 3, 2, 13, 0).time(),
              "USR", "AF 1900000-0 Software", "", "",
@@ -1127,11 +1128,9 @@ class GenerarHojaCreadosTest(unittest.TestCase):
         wb = load_workbook(poblacion)
         ws = wb[CREADOS_SHEET_NAME]
         esperado_11 = (
-            '=SI.CONJUNTO('
-            'K11="19";"Intangible";'
-            'K11="20";"Activo Construcción";'
-            'K11="14";"Activo Construcción";'
-            'VERDADERO;"PPE")'
+            '=IF(K11="19","Intangible",'
+            'IF(K11="20","Activo Construcción",'
+            'IF(K11="14","Activo Construcción","PPE")))'
         )
         esperado_12 = esperado_11.replace("K11", "K12")
         self.assertEqual(ws.cell(11, 12).value, esperado_11)

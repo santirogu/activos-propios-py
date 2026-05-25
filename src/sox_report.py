@@ -864,30 +864,34 @@ def generar_hoja_creados(archivo_poblacion: Path) -> dict[str, int]:
         ws_dst.cell(fila_excel, 9, datos[8])
         ws_dst.cell(fila_excel, 10, datos[9])
 
-        # K: fórmula Excel =EXTRAE(D{n};1;2) (MID en inglés). EXTRAE siempre
-        # devuelve texto, así que K queda como string al ser evaluada
-        # (preserva ceros a la izquierda). El number_format="@" refuerza el
-        # tipo declarativamente. Usar fórmula (en lugar de valor estático)
-        # permite que el usuario modifique D y vea K/L recalcularse en Excel.
+        # IMPORTANTE: las fórmulas se ESCRIBEN en inglés con `,` como
+        # separador porque el estándar OOXML del .xlsx así lo exige. Excel
+        # las TRADUCE al locale del usuario al mostrarlas (Excel-ES verá
+        # =EXTRAE(...) y =SI(...) en la barra de fórmulas). Escribirlas en
+        # español directamente en el XML hace que Excel reporte el archivo
+        # como dañado ("Hemos encontrado un problema con contenido...").
         #
-        # IMPORTANTE: las fórmulas están en español (EXTRAE, SI.CONJUNTO,
-        # VERDADERO) con `;` como separador porque el Excel del cliente está
-        # en español. Escribirlas en inglés (MID, IFS, TRUE, `,`) hacía que
-        # Excel-ES no las interpretara correctamente.
-        cell_k = ws_dst.cell(fila_excel, 11, f"=EXTRAE(D{fila_excel};1;2)")
+        # K: =MID(D{n},1,2). MID siempre devuelve texto, así que K queda
+        # como string al ser evaluada (preserva ceros a la izquierda). El
+        # number_format="@" refuerza el tipo declarativamente. Usar fórmula
+        # permite que el usuario modifique D y vea K/L recalcularse.
+        cell_k = ws_dst.cell(fila_excel, 11, f"=MID(D{fila_excel},1,2)")
         cell_k.number_format = "@"
 
-        # L: fórmula =SI.CONJUNTO(...) — clasifica según los primeros 2
-        # dígitos: K="19" → "Intangible", K="20"/"14" → "Activo
-        # Construcción", cualquier otro → "PPE". La fórmula se evalúa en
-        # Excel al abrir el archivo.
+        # L: IF anidado clasificando los primeros 2 dígitos. Usamos IF (no
+        # IFS) porque IFS es "future function" y necesitaría prefijo
+        # `_xlfn.IFS` para ser portable; IF es universal y compatible con
+        # cualquier versión/locale de Excel sin trucos.
+        #
+        # Equivalente lógico:
+        #   K="19"        → "Intangible"
+        #   K="20" o "14" → "Activo Construcción"
+        #   cualquier otro → "PPE"
         ws_dst.cell(
             fila_excel, 12,
-            f'=SI.CONJUNTO('
-            f'K{fila_excel}="19";"Intangible";'
-            f'K{fila_excel}="20";"Activo Construcción";'
-            f'K{fila_excel}="14";"Activo Construcción";'
-            f'VERDADERO;"PPE")'
+            f'=IF(K{fila_excel}="19","Intangible",'
+            f'IF(K{fila_excel}="20","Activo Construcción",'
+            f'IF(K{fila_excel}="14","Activo Construcción","PPE")))'
         )
 
     wb.save(archivo_poblacion)
