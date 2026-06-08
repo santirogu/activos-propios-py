@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime
 
 import openpyxl
+from tkinter import filedialog
 from tkcalendar import DateEntry
 
 import branding
@@ -492,6 +493,150 @@ def _extraer_activos_creados_handler(
     threading.Thread(target=worker, daemon=True).start()
 
 
+def _subir_anexos_handler(
+    root: tk.Tk,
+    sociedad: str,
+    archivos: list[Path],
+    status_var: tk.StringVar,
+    button: tk.Button,
+    btn_atras: tk.Button,
+) -> None:
+    """Valida la sociedad + archivos y lanza el worker que ejecuta el
+    flujo de subida de anexos a cada activo de la hoja Activos Fijos.
+
+    Patrón consistente con `_extraer_activos_creados_handler`:
+      - Validaciones previas (sociedad en la lista, al menos un archivo).
+      - Confirmación al usuario.
+      - Deshabilita Subir + Atrás durante el worker.
+      - Worker en thread daemon, envuelto en `_sap_com_apartment()`.
+      - `progress_callback` actualiza `status_var` vía `root.after`.
+      - Soft-fail: el módulo loguea + acumula fallos; al final muestra
+        resumen "X OK, Y fallos".
+    """
+    try:
+        from subir_anexos import validar_sociedad
+    except ImportError as exc:
+        messagebox.showerror(
+            "Error de import",
+            f"No se pudo importar subir_anexos:\n{exc}",
+        )
+        return
+
+    try:
+        sociedad_norm = validar_sociedad(sociedad)
+    except ValueError as exc:
+        messagebox.showerror("Datos inválidos", str(exc))
+        return
+
+    if not archivos:
+        messagebox.showerror(
+            "Sin archivos",
+            "Selecciona al menos un archivo antes de subir anexos.",
+        )
+        return
+
+    if not messagebox.askyesno(
+        "Confirmar subida de anexos",
+        f"Se subirán {len(archivos)} archivo(s) como adjuntos a CADA "
+        f"activo fijo de la hoja 'Activos Fijos' del último "
+        f"ActivosCreados_*.xlsx en salida/.\n\n"
+        f"  • Sociedad: {sociedad_norm}\n"
+        f"  • Archivos: {len(archivos)}\n\n"
+        f"Esto puede tomar varios minutos dependiendo del número de "
+        f"activos. NO interactúes con SAP durante el proceso.\n\n"
+        f"¿Continuar?",
+    ):
+        return
+
+    button.config(state="disabled")
+    btn_atras.config(state="disabled")
+
+    def update_status(text: str) -> None:
+        root.after(0, status_var.set, text)
+
+    def show_info(title: str, message: str) -> None:
+        root.after(0, lambda: messagebox.showinfo(title, message))
+
+    def show_error(title: str, message: str) -> None:
+        root.after(0, lambda: messagebox.showerror(title, message))
+
+    def reenable() -> None:
+        def _do():
+            button.config(state="normal")
+            btn_atras.config(state="normal")
+        root.after(0, _do)
+
+    def progress_callback(intento: int, total: int, desc: str) -> None:
+        update_status(f"Subiendo {intento}/{total}: {desc}")
+
+    def worker() -> None:
+        with _sap_com_apartment():
+            try:
+                try:
+                    from subir_anexos import (
+                        get_sap_session, subir_anexos,
+                    )
+                except ImportError as exc:
+                    show_error(
+                        "Error de import",
+                        f"No se pudo importar subir_anexos:\n{exc}",
+                    )
+                    return
+
+                try:
+                    update_status("Conectando a la sesión SAP...")
+                    session = get_sap_session()
+
+                    update_status(
+                        f"Preparando subida de {len(archivos)} "
+                        f"archivo(s) para sociedad {sociedad_norm}..."
+                    )
+                    stats = subir_anexos(
+                        session,
+                        sociedad_norm,
+                        archivos,
+                        progress_callback=progress_callback,
+                    )
+
+                    update_status(
+                        f"Finalizado: {stats['exitosos']} OK, "
+                        f"{stats['fallidos']} fallos"
+                    )
+
+                    resumen = (
+                        f"Subida finalizada.\n\n"
+                        f"  • Exitosos: {stats['exitosos']} / "
+                        f"{stats['total_intentos']}\n"
+                        f"  • Fallidos: {stats['fallidos']}\n"
+                    )
+                    if stats["detalles_fallos"]:
+                        resumen += "\nPrimeros fallos:\n"
+                        for activo, sub, archivo, error in (
+                            stats["detalles_fallos"][:5]
+                        ):
+                            nombre = Path(archivo).name
+                            resumen += (
+                                f"  • {activo}-{sub} / {nombre}\n"
+                            )
+                        if len(stats["detalles_fallos"]) > 5:
+                            resumen += (
+                                f"  • ... y "
+                                f"{len(stats['detalles_fallos']) - 5} más\n"
+                            )
+
+                    if stats["fallidos"] == 0:
+                        show_info("Subida completada", resumen)
+                    else:
+                        show_error("Subida con fallos", resumen)
+                except Exception as exc:
+                    update_status("")
+                    show_error("Error en la subida", str(exc))
+            finally:
+                reenable()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def _crear_header_form(
     root: tk.Tk,
     frame: tk.Frame,
@@ -602,6 +747,15 @@ def abrir_activos_fijos(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     branding.aplicar_estilo_primario(btn_extraer_creados)
     btn_extraer_creados.pack(pady=(0, 8))
 
+    btn_subir_anexos = tk.Button(
+        frame_activos,
+        text="Subir Anexos",
+        padx=18, pady=8, width=24,
+        command=lambda: abrir_subir_anexos(root, frame_activos),
+    )
+    branding.aplicar_estilo_primario(btn_subir_anexos)
+    btn_subir_anexos.pack(pady=(0, 8))
+
     tk.Label(
         frame_activos,
         textvariable=status_var,
@@ -648,6 +802,7 @@ def abrir_activos_fijos(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     frame_activos.btn_extraer = btn_extraer
     frame_activos.btn_creacion = btn_creacion
     frame_activos.btn_extraer_creados = btn_extraer_creados
+    frame_activos.btn_subir_anexos = btn_subir_anexos
     frame_activos.btn_atras = btn_atras
 
     return frame_activos
@@ -710,6 +865,157 @@ def abrir_extraer_creados(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     frame_extraer.btn_atras = btn_atras
 
     return frame_extraer
+
+
+def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
+    """Sub-formulario "Subir Anexos" — accesible desde Activos Fijos.
+
+    Permite seleccionar 1+ archivos del sistema de archivos y subirlos
+    como adjuntos a cada activo fijo de la hoja `Activos Fijos` del
+    último `ActivosCreados_*.xlsx` en `salida/` (vía SAP AS02 + GOS).
+
+    Form:
+      - `Sociedad` (Combobox readonly, mismas opciones que Control SOX).
+      - Botón `Seleccionar archivos` (abre `filedialog.askopenfilenames`).
+      - Listbox con los archivos seleccionados (botón `Quitar` los borra).
+      - Botón `Subir Anexos a SAP` (cableado a `_subir_anexos_handler`).
+      - Status label con progreso durante el worker.
+    """
+    # Importar VALID_SOCIEDADES lazy para no romper en macOS dev (no
+    # tiene pywin32 pero sí openpyxl, así que sox_report sí importa OK).
+    from sox_report import VALID_SOCIEDADES
+
+    frame_activos.pack_forget()
+
+    frame_anexos = tk.Frame(root, bg=branding.ISA_FONDO)
+    btn_atras = _crear_header_form(
+        root, frame_anexos, frame_activos,
+        titulo="Subir Anexos",
+        subtitulo="Adjunta archivos a los activos creados en SAP",
+    )
+
+    # --- Form: Sociedad ---
+    form = tk.Frame(frame_anexos, bg=branding.ISA_FONDO)
+    form.pack(pady=(8, 8))
+
+    tk.Label(
+        form, text="Sociedad:", anchor="e", width=10,
+        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+        font=("Helvetica", 10),
+    ).grid(row=0, column=0, padx=4, pady=8, sticky="e")
+
+    sociedad_var = tk.StringVar()
+    sociedad_combo = ttk.Combobox(
+        form,
+        textvariable=sociedad_var,
+        values=list(VALID_SOCIEDADES),
+        state="readonly",
+        width=14,
+    )
+    sociedad_combo.grid(row=0, column=1, padx=4, pady=8, sticky="w")
+
+    # --- File picker + listbox ---
+    archivos_seleccionados: list[Path] = []
+
+    archivos_frame = tk.Frame(frame_anexos, bg=branding.ISA_FONDO)
+    archivos_frame.pack(pady=(8, 0))
+
+    btn_seleccionar = tk.Button(
+        archivos_frame,
+        text="Seleccionar archivos",
+        padx=12, pady=4,
+        font=("Helvetica", 10),
+    )
+    branding.aplicar_estilo_terciario(btn_seleccionar)
+    btn_seleccionar.grid(row=0, column=0, padx=4, sticky="w")
+
+    btn_quitar = tk.Button(
+        archivos_frame,
+        text="Quitar seleccionado",
+        padx=12, pady=4,
+        font=("Helvetica", 10),
+    )
+    branding.aplicar_estilo_terciario(btn_quitar)
+    btn_quitar.grid(row=0, column=1, padx=4, sticky="w")
+
+    archivos_listbox = tk.Listbox(
+        frame_anexos, height=6, width=60,
+        font=("Helvetica", 9),
+        selectmode="single",
+    )
+    archivos_listbox.pack(pady=(8, 0))
+
+    def _refrescar_listbox() -> None:
+        archivos_listbox.delete(0, "end")
+        for p in archivos_seleccionados:
+            archivos_listbox.insert("end", p.name)
+
+    def _seleccionar_archivos() -> None:
+        paths = filedialog.askopenfilenames(
+            title="Seleccionar archivos a adjuntar",
+        )
+        for p_str in paths:
+            p = Path(p_str)
+            if p not in archivos_seleccionados:
+                archivos_seleccionados.append(p)
+        _refrescar_listbox()
+
+    def _quitar_archivo() -> None:
+        sel = archivos_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if 0 <= idx < len(archivos_seleccionados):
+            archivos_seleccionados.pop(idx)
+            _refrescar_listbox()
+
+    btn_seleccionar.config(command=_seleccionar_archivos)
+    btn_quitar.config(command=_quitar_archivo)
+
+    # --- Status + botón Subir ---
+    status_var = tk.StringVar(value="")
+
+    btn_subir = tk.Button(
+        frame_anexos,
+        text="Subir Anexos a SAP",
+        padx=18, pady=8, width=22,
+    )
+    btn_subir.config(
+        command=lambda: _subir_anexos_handler(
+            root,
+            sociedad_var.get(),
+            list(archivos_seleccionados),
+            status_var,
+            btn_subir,
+            btn_atras,
+        )
+    )
+    branding.aplicar_estilo_primario(btn_subir)
+    btn_subir.pack(pady=(14, 6))
+
+    tk.Label(
+        frame_anexos,
+        textvariable=status_var,
+        font=("Helvetica", 9),
+        fg=branding.ISA_VERDE_OK,
+        bg=branding.ISA_FONDO,
+        wraplength=560,
+    ).pack(pady=(4, 0))
+
+    frame_anexos.pack(fill="both", expand=True)
+
+    # Exponer atributos clave para tests.
+    frame_anexos.sociedad_var = sociedad_var
+    frame_anexos.sociedad_combo = sociedad_combo
+    frame_anexos.archivos_listbox = archivos_listbox
+    frame_anexos.archivos_seleccionados = archivos_seleccionados
+    frame_anexos.btn_seleccionar = btn_seleccionar
+    frame_anexos.btn_quitar = btn_quitar
+    frame_anexos.btn_subir = btn_subir
+    frame_anexos.btn_atras = btn_atras
+    frame_anexos.status_var = status_var
+
+    return frame_anexos
 
 
 def abrir_sox_menu(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:

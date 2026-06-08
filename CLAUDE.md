@@ -33,6 +33,7 @@ La autenticación SAP es manual; el script no logea al usuario, solo se conecta 
 │   ├── sap_upload.py    # Flujo LSMW completo (10 pasos) vía SAP GUI Scripting
 │   ├── sox_report.py    # Flujo Reporte SOX (4 pasos) vía SAP GUI Scripting
 │   ├── extraer_activos_creados.py  # Flujo SM35P (4 pasos): filtro por usuario + export log
+│   ├── subir_anexos.py  # Flujo AS02 + GOS PCATTA_CREA: adjunta archivos a cada activo
 │   └── branding.py      # Paleta corporativa Hub de ISA + helpers para Tk
 ├── tests/
 │   ├── test_main.py         # 63 pruebas: extracción + handlers de botones + diálogo SOX
@@ -280,6 +281,54 @@ Replica `resources/ScriptSM35P.vbs`. Filtra el Monitor de Logs BDC (T-code **SM3
 python src/extraer_activos_creados.py 1017209574
 ```
 Exit codes: 0 OK, 1 error (validación o SAP), 2 uso incorrecto.
+
+## 6.6. Flujo Subir Anexos — `src/subir_anexos.py`
+
+Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que el usuario hizo durante la grabación — inyectamos `DY_PATH` directamente). Para cada par `(activo, subnúmero)` leído de la hoja `Activos Fijos` del último `ActivosCreados_*.xlsx` en `salida/`, sube cada uno de los archivos seleccionados como adjunto SAP vía **AS02** (Cambio Activo Fijo) + **GOS PCATTA_CREA** (Crear Adjunto del Object Services).
+
+### Constantes clave
+- `T_CODE_AS02 = "as02"` — Cambio Activo Fijo.
+- `CAMPO_ANLN1 = "wnd[0]/usr/ctxtANLA-ANLN1"` — número de activo.
+- `CAMPO_ANLN2 = "wnd[0]/usr/ctxtANLA-ANLN2"` — subnúmero.
+- `CAMPO_BUKRS = "wnd[0]/usr/ctxtANLA-BUKRS"` — sociedad.
+- `SHELL_TITULAR = "wnd[0]/titl/shellcont/shell"` — shell del menú GOS (toolbox del título).
+- `GOS_TOOLBOX = "%GOS_TOOLBOX"`, `GOS_PCATTA_CREA = "%GOS_PCATTA_CREA"` — context buttons del menú GOS.
+- `CAMPO_DY_PATH = "wnd[3]/usr/ctxtDY_PATH"`, `CAMPO_DY_FILENAME = "wnd[3]/usr/ctxtDY_FILENAME"` — diálogo final del path. Inyectamos directo aquí en lugar de navegar con el picker (wnd[5]/wnd[6] del recording).
+- `BTN_CONFIRMAR_WND1/2/3 = "wnd[X]/tbar[0]/btn[0]"` — botones de confirmación de la cascada de vuelta.
+
+### Mapeo del flujo (8 etapas por (activo × archivo))
+
+| # | Función | Acciones SAP |
+|---|---|---|
+| 1 | `adjuntar_archivo` | okcd="as02" + Enter (abre AS02) |
+| 2 | id. | Set ANLN1 + ANLN2 + BUKRS + setFocus + caretPosition + Enter (carga el activo) |
+| 3 | id. | `shell.pressContextButton("%GOS_TOOLBOX")` (abre menú GOS) |
+| 4 | id. | `shell.selectContextMenuItem("%GOS_PCATTA_CREA")` (Crear adjunto) |
+| 5 | id. | F4 en wnd[1] → abre wnd[2] (cascada hacia el path dialog) |
+| 6 | id. | F4 en wnd[2] → abre wnd[3] |
+| 7 | id. | Set `DY_PATH = ruta absoluta del archivo` + `DY_FILENAME = ""` + setFocus + caretPosition |
+| 8 | id. | btn[0] wnd[3] → btn[0] wnd[2] → btn[0] wnd[1] (cascada de confirmación) |
+
+### Helpers
+- `validar_sociedad`, `VALID_SOCIEDADES` — importadas de `sox_report` (única fuente de verdad para la lista de sociedades).
+- `get_archivo_activos_mas_reciente(salida_dir)` — busca `ActivosCreados_*.xlsx` más reciente por mtime. Lanza `FileNotFoundError` si no hay (típicamente porque el usuario no corrió "Extraer Activos Creados" antes).
+- `leer_activos_del_excel(archivo_path)` — abre con openpyxl la hoja `Activos Fijos` (constante `ACTIVOS_FIJOS_SHEET_NAME` reusada de `extraer_activos_creados`) y devuelve `list[tuple[int, int]]` con `(activo, subnúmero)`. Salta filas no-int para robustez.
+- `get_sap_session()` — idéntico al patrón de otros módulos SAP.
+
+### Orquestador — `subir_anexos(session, sociedad, archivos, archivo_activos=None, progress_callback=None)`
+- Loop `for activo in activos: for archivo in archivos: adjuntar_archivo(...)`.
+- **Soft-fail por iteración**: si `adjuntar_archivo` lanza, se acumula en `detalles_fallos` y se continúa con la siguiente combinación. NO aborta.
+- `progress_callback(intento, total, descripcion)` se llama antes de cada attachment para que el handler GUI actualice el status label (el callback se llama dentro de try/except para que un bug en la GUI no rompa el flujo SAP).
+- Devuelve `{exitosos, fallidos, total_intentos, detalles_fallos: list[(activo, sub, archivo, error_msg)]}`.
+
+### GUI — Vista "Subir Anexos" (`abrir_subir_anexos(root, frame_activos)`)
+- Accesible desde **Activos Fijos** vía el botón `Subir Anexos` (tercer botón).
+- Form: combo `Sociedad` (readonly) + `[Seleccionar archivos]` (abre `filedialog.askopenfilenames`) + `[Quitar seleccionado]` + Listbox de archivos elegidos + botón `[Subir Anexos a SAP]` + status label.
+- Handler `_subir_anexos_handler(root, sociedad, archivos, status_var, button, btn_atras)` — valida sociedad/archivos, pide confirmación con conteo, deshabilita Subir+Atrás, ejecuta worker en thread daemon envuelto en `_sap_com_apartment()`, pasa `progress_callback` que actualiza `status_var` vía `root.after`. Al final muestra messagebox con resumen `X OK / Y fallos` (showinfo si todos OK, showerror si hubo fallos).
+
+### Limitaciones conocidas
+- La cascada wnd[1]→wnd[2]→wnd[3] depende de que el GOS PCATTA_CREA abra exactamente esa profundidad de diálogos. Si la versión de SAP del cliente abre menos o más niveles, hay que ajustar el número de F4 / botones de confirmación.
+- Cada attachment ejecuta el ciclo completo AS02 + GOS + cascada — esto es lento (~5-10s por iteración). Para subir, ej., 50 activos × 3 archivos = 150 iteraciones ≈ 15-25 minutos. NO interactuar con SAP durante el proceso.
 
 ## 7. Datos: Hoja LSMW del Excel
 

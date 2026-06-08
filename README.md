@@ -69,7 +69,7 @@ python src/main.py
 
 ### Card "Activos Fijos"
 
-Reemplaza la vista del menú por un sub-formulario con tres botones:
+Reemplaza la vista del menú por un sub-formulario con cuatro botones:
 
 #### "Extraer información en txt"
 
@@ -126,6 +126,34 @@ También se puede ejecutar sin GUI:
 
 ```bash
 python src/extraer_activos_creados.py 1017209574
+```
+
+#### "Subir Anexos"
+
+Cuarto botón. Abre una sub-vista que permite adjuntar uno o varios archivos a CADA activo fijo de la hoja `Activos Fijos` del último `ActivosCreados_*.xlsx`. El form contiene:
+
+- **Sociedad** (Combobox readonly con `TRAN, ISA, ITCH, CEYBA, CABA, RPAE, CTMP, REPD, ISAP`).
+- **Seleccionar archivos** — abre el diálogo nativo de Windows para elegir 1+ archivos.
+- **Quitar seleccionado** — borra el archivo seleccionado de la lista.
+- **Listbox** mostrando los archivos a subir.
+- **Subir Anexos a SAP** — dispara el flujo.
+
+Al pulsar Subir Anexos a SAP:
+1. Valida sociedad + al menos un archivo.
+2. Pide confirmación con `N archivos × M activos` total.
+3. Para cada par `(activo, subnúmero)` × cada archivo, ejecuta en SAP (vía AS02 + GOS PCATTA_CREA):
+   - Abre AS02 con `ANLN1`, `ANLN2`, `BUKRS`.
+   - Abre el menú "Servicios para Objeto" → "Crear adjunto".
+   - Inyecta el path absoluto del archivo y confirma la cascada de diálogos.
+4. **Soft-fail por iteración**: si un activo no existe o el archivo es rechazado, se loguea y se sigue con el siguiente. Al final se muestra resumen `X OK / Y fallos`.
+5. Status label muestra `Subiendo N/total: activo X-Y, archivo foo.pdf` durante el proceso.
+
+Lento: cada attachment ~5-10s (depende del SAP). 50 activos × 3 archivos ≈ 15-25 minutos. NO interactuar con SAP durante el proceso.
+
+También CLI:
+
+```bash
+python src/subir_anexos.py ISA C:\docs\contrato.pdf C:\docs\foto.jpg
 ```
 
 ### Card "Control SOX"
