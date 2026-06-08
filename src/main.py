@@ -126,14 +126,6 @@ def _refrescar_estado_boton_subir(button: tk.Button) -> None:
     button.config(state="normal" if _hay_txt_en_salida() else "disabled")
 
 
-def _poll_estado_boton_subir(root: tk.Tk, button: tk.Button) -> None:
-    """Refresca el estado del botón y se re-programa cada `_POLL_INTERVAL_MS`."""
-    _refrescar_estado_boton_subir(button)
-    root.after(
-        _POLL_INTERVAL_MS, lambda: _poll_estado_boton_subir(root, button)
-    )
-
-
 def export_sheet_to_tsv(
     excel_path: Path,
     sheet_name: str,
@@ -411,6 +403,193 @@ def _generar_reporte_sox_handler(
     threading.Thread(target=worker, daemon=True).start()
 
 
+def _crear_header_form(
+    root: tk.Tk,
+    frame: tk.Frame,
+    parent_frame: tk.Frame,
+    titulo: str,
+    subtitulo: str | None = None,
+) -> tk.Button:
+    """Construye el encabezado consistente de cualquier sub-formulario:
+    botón "← Atrás" arriba-izquierda + logo centrado + título + subtítulo.
+
+    Devuelve el botón Atrás para que el caller pueda referenciarlo (p. ej.
+    para deshabilitarlo durante un worker). El botón ya tiene cableado el
+    comando que destruye `frame` y re-empaca `parent_frame`.
+    """
+    btn_atras = tk.Button(
+        frame, text="← Atrás", font=("Helvetica", 9), padx=8, pady=2,
+    )
+    branding.aplicar_estilo_terciario(btn_atras)
+    btn_atras.pack(anchor="w", padx=10, pady=(10, 0))
+
+    def volver() -> None:
+        frame.destroy()
+        parent_frame.pack(fill="both", expand=True)
+
+    btn_atras.config(command=volver)
+
+    # Logo (reusa la referencia del root para no recargar la imagen).
+    if getattr(root, "_logo_ref", None) is not None:
+        tk.Label(
+            frame, image=root._logo_ref, bg=branding.ISA_FONDO
+        ).pack(pady=(4, 6))
+
+    tk.Label(
+        frame,
+        text=titulo,
+        font=("Helvetica", 14, "bold"),
+        fg=branding.ISA_AZUL,
+        bg=branding.ISA_FONDO,
+    ).pack(pady=(4, 4))
+
+    if subtitulo is not None:
+        tk.Label(
+            frame,
+            text=subtitulo,
+            font=("Helvetica", 10),
+            fg=branding.ISA_GRIS,
+            bg=branding.ISA_FONDO,
+        ).pack(pady=(0, 12))
+
+    return btn_atras
+
+
+def abrir_activos_fijos(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
+    """Sub-formulario "Activos Fijos" — accesible desde el menú principal.
+
+    Contiene dos botones:
+      - "Extraer información en txt": misma lógica que el botón homónimo
+        anterior (función `extraer_lsmw_a_txt`).
+      - "Creación de Activo": misma lógica que el viejo "Subir a SAP"
+        (función `subir_a_sap`), incluyendo el polling que lo habilita
+        sólo cuando hay un LSMW_*.txt en salida/.
+
+    El polling se inicia al entrar a la vista y se cancela al salir
+    (back button) para no dejar callbacks programados sobre widgets
+    destruidos.
+
+    Devuelve el `Frame` creado para que los tests puedan inspeccionar
+    los widgets vía atributos.
+    """
+    frame_menu.pack_forget()
+
+    frame_activos = tk.Frame(root, bg=branding.ISA_FONDO)
+    btn_atras = _crear_header_form(
+        root, frame_activos, frame_menu,
+        titulo="Activos Fijos",
+        subtitulo="Extracción de información y creación de activos en SAP",
+    )
+
+    status_var = tk.StringVar(value="")
+
+    btn_extraer = tk.Button(
+        frame_activos,
+        text="Extraer información en txt",
+        command=lambda: extraer_lsmw_a_txt(status_var),
+        padx=18, pady=8, width=24,
+    )
+    branding.aplicar_estilo_primario(btn_extraer)
+    btn_extraer.pack(pady=(8, 8))
+
+    btn_creacion = tk.Button(
+        frame_activos,
+        text="Creación de Activo",
+        padx=18, pady=8, width=24,
+        state="disabled",
+    )
+    btn_creacion.config(
+        command=lambda: subir_a_sap(root, status_var, btn_creacion)
+    )
+    branding.aplicar_estilo_primario(btn_creacion)
+    btn_creacion.pack(pady=(0, 8))
+
+    tk.Label(
+        frame_activos,
+        textvariable=status_var,
+        font=("Helvetica", 9),
+        fg=branding.ISA_VERDE_OK,
+        bg=branding.ISA_FONDO,
+        wraplength=440,
+    ).pack(pady=(12, 0))
+
+    # Polling scoped al frame: se inicia ahora, se cancela cuando el
+    # frame se destruye (vía el binding <Destroy>). Esto evita callbacks
+    # programados sobre un Button ya destruido cuando el usuario regresa
+    # al menú.
+    polling_id_holder: list[str | None] = [None]
+
+    def poll_creacion_activo() -> None:
+        if not btn_creacion.winfo_exists():
+            return
+        _refrescar_estado_boton_subir(btn_creacion)
+        polling_id_holder[0] = root.after(
+            _POLL_INTERVAL_MS, poll_creacion_activo
+        )
+
+    def on_frame_destroy(_event):
+        # Cancelar polling para no dejar callbacks sueltos.
+        if polling_id_holder[0] is not None:
+            try:
+                root.after_cancel(polling_id_holder[0])
+            except Exception:
+                pass
+
+    frame_activos.bind("<Destroy>", on_frame_destroy)
+
+    # Estado inicial + arrancar polling.
+    _refrescar_estado_boton_subir(btn_creacion)
+    polling_id_holder[0] = root.after(
+        _POLL_INTERVAL_MS, poll_creacion_activo
+    )
+
+    frame_activos.pack(fill="both", expand=True)
+
+    # Exponer atributos clave para los tests.
+    frame_activos.status_var = status_var
+    frame_activos.btn_extraer = btn_extraer
+    frame_activos.btn_creacion = btn_creacion
+    frame_activos.btn_atras = btn_atras
+
+    return frame_activos
+
+
+def abrir_sox_menu(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
+    """Sub-formulario intermedio "Control SOX" — accesible desde el menú
+    principal. Muestra un único botón "HUB.PPE.01 Creación de Activos
+    Fijos" que abre el formulario con los parámetros (sociedad + fechas).
+
+    Diseñado como contenedor de futuras opciones HUB.PPE.XX que se vayan
+    agregando: hoy es un único botón pero la estructura permite añadir
+    más sin mover la lógica del menú principal.
+    """
+    frame_menu.pack_forget()
+
+    frame_sox_menu = tk.Frame(root, bg=branding.ISA_FONDO)
+    btn_atras = _crear_header_form(
+        root, frame_sox_menu, frame_menu,
+        titulo="Control SOX",
+        subtitulo="Procesos de control y auditoría",
+    )
+
+    btn_hub_ppe_01 = tk.Button(
+        frame_sox_menu,
+        text="HUB.PPE.01 Creación de Activos Fijos",
+        padx=18, pady=8, width=32,
+        command=lambda: control_sox(root, frame_sox_menu),
+    )
+    branding.aplicar_estilo_primario(btn_hub_ppe_01)
+    btn_hub_ppe_01.pack(pady=(12, 8))
+
+    frame_sox_menu.pack(fill="both", expand=True)
+
+    # Exponer atributos clave para los tests.
+    frame_sox_menu.btn_hub_ppe_01 = btn_hub_ppe_01
+    frame_sox_menu.btn_atras = btn_atras
+
+    return frame_sox_menu
+
+
 def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     """Reemplaza la vista del menú principal por el formulario Control SOX
     en la misma ventana (sin abrir un Toplevel).
@@ -621,110 +800,93 @@ def _test_conexion_sap_handler() -> None:
 def main() -> None:
     root = tk.Tk()
     _install_tk_exception_handler(root)
-    root.title("Creación Activos SAP")
-    # Ventana un poco más alta (era 380) para acomodar el logo arriba.
-    root.geometry("520x460")
+    root.title("Gestión de Activos Fijos")
+    # Ventana algo más ancha para acomodar 3 cards horizontales.
+    root.geometry("620x480")
     root.resizable(False, False)
     root.configure(bg=branding.ISA_FONDO)
 
     # Todos los widgets del menú principal viven dentro de `frame_menu`
-    # (no directo en `root`) para que `control_sox` pueda ocultarlo con
-    # pack_forget y mostrar su propio frame en la misma ventana,
-    # preservando el estado del menú (status_var, polling, etc.).
+    # para que las sub-vistas (Activos Fijos, Control SOX) puedan
+    # ocultarlo con pack_forget y mostrar sus propios frames en la misma
+    # ventana, preservando el estado del menú.
     frame_menu = tk.Frame(root, bg=branding.ISA_FONDO)
 
     # Logo Hub de ISA arriba. Si el archivo no existe, _logo_ref es None
     # y simplemente no se renderiza la imagen (graceful fallback). La
-    # referencia se guarda en `root` para que GC no libere la imagen.
+    # referencia se guarda en `root` para que GC no libere la imagen y
+    # también para que `_crear_header_form` la reuse en sub-vistas.
     root._logo_ref = branding.cargar_logo()
     if root._logo_ref is not None:
-        logo_label = tk.Label(frame_menu, image=root._logo_ref, bg=branding.ISA_FONDO)
-        logo_label.pack(pady=(18, 6))
+        tk.Label(
+            frame_menu, image=root._logo_ref, bg=branding.ISA_FONDO,
+        ).pack(pady=(18, 8))
 
-    title = tk.Label(
+    tk.Label(
         frame_menu,
-        text="Creación de Activos Fijos en SAP",
-        font=("Helvetica", 13, "bold"),
+        text="Gestión de Activos Fijos",
+        font=("Helvetica", 14, "bold"),
         fg=branding.ISA_AZUL,
         bg=branding.ISA_FONDO,
+    ).pack(pady=(4, 20))
+
+    # --- 3 cards horizontales (Activos Fijos | Control SOX | Reportes) ---
+    # Cada card es un tk.Button con altura/ancho consistentes para que la
+    # fila se vea pareja. `Reportes` queda en `state="disabled"` por ahora.
+    cards_row = tk.Frame(frame_menu, bg=branding.ISA_FONDO)
+    cards_row.pack(pady=(8, 0))
+
+    def _crear_card(parent, texto, command=None, disabled=False) -> tk.Button:
+        card = tk.Button(
+            parent,
+            text=texto,
+            padx=12,
+            pady=24,
+            width=16,
+            wraplength=140,
+            command=command,
+        )
+        branding.aplicar_estilo_primario(card)
+        if disabled:
+            card.config(state="disabled")
+        return card
+
+    btn_card_activos = _crear_card(
+        cards_row,
+        "Activos Fijos",
+        command=lambda: abrir_activos_fijos(root, frame_menu),
     )
-    title.pack(pady=(4, 4))
+    btn_card_activos.pack(side="left", padx=10)
 
-    subtitle = tk.Label(
-        frame_menu,
-        text=f"Origen: resources/{EXCEL_PATH.name}\nDestino: salida/",
-        font=("Helvetica", 10),
-        fg=branding.ISA_GRIS,
-        bg=branding.ISA_FONDO,
-        justify="center",
+    btn_card_sox = _crear_card(
+        cards_row,
+        "Control SOX",
+        command=lambda: abrir_sox_menu(root, frame_menu),
     )
-    subtitle.pack(pady=(0, 14))
+    btn_card_sox.pack(side="left", padx=10)
 
-    status_var = tk.StringVar(value="")
-
-    btn_extraer = tk.Button(
-        frame_menu,
-        text="Extraer información en txt",
-        command=lambda: extraer_lsmw_a_txt(status_var),
-        padx=18,
-        pady=8,
-        width=24,
+    btn_card_reportes = _crear_card(
+        cards_row,
+        "Reportes",
+        disabled=True,
     )
-    branding.aplicar_estilo_primario(btn_extraer)
-    btn_extraer.pack(pady=(0, 8))
+    btn_card_reportes.pack(side="left", padx=10)
 
-    btn_subir = tk.Button(
-        frame_menu,
-        text="Subir a SAP",
-        padx=18,
-        pady=8,
-        width=24,
-        state="disabled",
-    )
-    btn_subir.config(command=lambda: subir_a_sap(root, status_var, btn_subir))
-    branding.aplicar_estilo_primario(btn_subir)
-    btn_subir.pack(pady=(0, 8))
-
-    btn_sox = tk.Button(
-        frame_menu,
-        text="Control SOX",
-        padx=18,
-        pady=8,
-        width=24,
-        command=lambda: control_sox(root, frame_menu),
-    )
-    branding.aplicar_estilo_primario(btn_sox)
-    btn_sox.pack(pady=(0, 14))
-
-    # Botón de diagnóstico: verifica si la conexión a SAP está disponible
-    # sin ejecutar un flujo completo. Estilo terciario (más pequeño, gris)
-    # para marcar que es una herramienta de troubleshooting.
+    # Botón de diagnóstico "Test conexión SAP": se conserva el código pero
+    # NO se hace .pack para ocultarlo de la UI (puede reactivarse en el
+    # futuro re-empaquetándolo). El handler `_test_conexion_sap_handler`
+    # tampoco se borra.
     btn_test = tk.Button(
         frame_menu,
         text="Test conexión SAP",
         font=("Helvetica", 9),
-        padx=10,
-        pady=2,
+        padx=10, pady=2,
         command=_test_conexion_sap_handler,
     )
     branding.aplicar_estilo_terciario(btn_test)
-    btn_test.pack()
-
-    status = tk.Label(
-        frame_menu,
-        textvariable=status_var,
-        font=("Helvetica", 9),
-        fg=branding.ISA_VERDE_OK,
-        bg=branding.ISA_FONDO,
-        wraplength=440,
-    )
-    status.pack(pady=(12, 0))
+    # btn_test.pack()  # intencionalmente oculto
 
     frame_menu.pack(fill="both", expand=True)
-
-    # Polling: habilita el botón "Subir a SAP" cuando aparezca un .txt en
-    # salida/ y lo deshabilita cuando no haya. Se re-programa cada segundo.
-    _poll_estado_boton_subir(root, btn_subir)
 
     root.mainloop()
 

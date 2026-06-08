@@ -35,7 +35,7 @@ El proceso completo contempla:
 
 ```bash
 # 1. Clonar el repositorio
-git clone https://github.com/santirogu/activos-propios-py.git
+git clone <URL-DEL-REPO> activos-propios-py
 cd activos-propios-py
 
 # 2. (Recomendado) Crear y activar un entorno virtual
@@ -50,12 +50,15 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
-La ventana muestra dos botones:
+La ventana principal (título: "Gestión de Activos Fijos") muestra **3 cards horizontales del mismo ancho**:
 
-- **Extraer información en txt** — funciona en cualquier sistema operativo.
-- **Subir a SAP** — solo funciona en Windows con SAP GUI configurado.
+- **Activos Fijos** — abre una sub-vista con `[Extraer información en txt]` y `[Creación de Activo]` (multiplataforma para extraer; Windows para SAP).
+- **Control SOX** — abre una sub-vista intermedia con un botón `[HUB.PPE.01 Creación de Activos Fijos]` que lleva al formulario clásico de Sociedad + Desde + Hasta (Solo Windows).
+- **Reportes** — placeholder deshabilitado, reservado para funcionalidades futuras.
 
-La GUI usa la **paleta corporativa Hub de ISA** (navy `#1A3A6C` + naranja `#F58220`, definida en [`src/branding.py`](src/branding.py)). El logo se carga desde `resources/logo_hub_isa.png` (opcional — si el archivo no está, la GUI muestra sólo texto con colores).
+Cada sub-vista tiene su propio botón "← Atrás" arriba a la izquierda para devolver al nivel anterior.
+
+La GUI usa la **paleta corporativa Hub de ISA** (navy `#1A3A6C` + naranja `#F58220`, definida en [`src/branding.py`](src/branding.py)). El logo se carga desde `resources/logo_hub_isa.png` a 85px de alto (opcional — si el archivo no está, la GUI muestra sólo texto con colores).
 
 ## Cómo ejecutar la app
 
@@ -64,7 +67,11 @@ python src/main.py
 
 ```
 
-### Botón "Extraer información en txt"
+### Card "Activos Fijos"
+
+Reemplaza la vista del menú por un sub-formulario con dos botones:
+
+#### "Extraer información en txt"
 
 - Lee la hoja `LSMW` de `resources/Formato_Dinamico_.xlsx`.
 - Crea la carpeta `salida/` en la raíz si no existe.
@@ -74,9 +81,9 @@ python src/main.py
 - Si no hay archivos previos, genera directamente un TSV con el patrón `LSMW_YYYYMMDD_HHMMSS.txt`.
 - Muestra confirmación con la cantidad de filas exportadas.
 
-### Botón "Subir a SAP"
+#### "Creación de Activo" (antes "Subir a SAP")
 
-- **Arranca deshabilitado.** Se habilita automáticamente cuando detecta un `LSMW_*.txt` en `salida/` (polling cada 1 segundo). Si la carpeta queda vacía, vuelve a deshabilitarse.
+- **Arranca deshabilitado.** Se habilita automáticamente cuando detecta un `LSMW_*.txt` en `salida/` (polling cada 1 segundo, **scoped al frame** — se cancela al salir de la sub-vista). Si la carpeta queda vacía, vuelve a deshabilitarse.
 - Pide confirmación antes de ejecutar (operación sensible que toma control de SAP).
 - Toma el `.txt` más reciente de `salida/`.
 - Conecta a la sesión SAP abierta vía SAP GUI Scripting (COM).
@@ -91,9 +98,15 @@ También se puede ejecutar la carga sin GUI:
 python src/sap_upload.py
 ```
 
-### Botón "Control SOX"
+### Card "Control SOX"
 
-Reemplaza la vista del menú principal por un formulario embebido en la misma ventana (no abre un Toplevel separado). Arriba a la izquierda aparece un botón **"← Atrás"** que devuelve la vista al menú. El formulario sirve para generar el **Reporte SOX** desde SAP:
+Abre una sub-vista intermedia con un único botón **"HUB.PPE.01 Creación de Activos Fijos"**. Al pulsarlo, se abre el formulario clásico de parámetros SOX (Sociedad + Desde + Hasta) — el flujo sigue siendo el mismo que antes. Doble back devuelve al menú principal.
+
+La estructura intermedia permite añadir en el futuro más opciones HUB.PPE.XX sin modificar el menú principal.
+
+#### Formulario de parámetros (después del botón HUB.PPE.01)
+
+Reemplaza la vista del intermedio por un formulario embebido en la misma ventana (no abre un Toplevel separado). Arriba a la izquierda aparece un botón **"← Atrás"** que devuelve al intermedio. El formulario sirve para generar el **Reporte SOX** desde SAP:
 
 - **Sociedad** — selector desplegable (`Combobox` en estado `readonly`) con las opciones: `TRAN, ISA, ITCH, CEYBA, CABA, RPAE, CTMP, REPD, ISAP`. El usuario no puede escribir valores arbitrarios.
 - **Desde** / **Hasta** — campos con **calendario emergente** (`DateEntry` de `tkcalendar`). El usuario puede elegir la fecha del calendario o escribirla a mano. Aún en escritura manual, el `validatecommand` restringe a dígitos y puntos (máx 10 caracteres). Formato `dd.mm.aaaa`.
@@ -121,7 +134,7 @@ python src/sox_report.py ISA 01.05.2026 31.05.2026
 
 ### Debugging y logs
 
-La ventana principal incluye un botón pequeño **"Test conexión SAP"** que verifica el estado de la conexión SAP GUI sin ejecutar ningún flujo. Reporta qué encontró:
+La función **"Test conexión SAP"** verifica el estado de la conexión SAP GUI sin ejecutar ningún flujo. Actualmente el botón **está oculto en la UI** (se conserva el código y el handler `_test_conexion_sap_handler` para reactivarlo en el futuro re-empaquetándolo en `main()`). Reporta qué encontró:
 
 - pywin32 ausente
 - SAP GUI no abierto / COM inaccesible

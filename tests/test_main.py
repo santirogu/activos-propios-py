@@ -738,26 +738,12 @@ class RefrescarEstadoBotonSubirTest(unittest.TestCase):
         self.assertEqual(str(self.button["state"]), "disabled")
 
 
-class PollEstadoBotonSubirTest(unittest.TestCase):
-    """_poll_estado_boton_subir refresca y re-programa cada intervalo."""
-
-    def setUp(self) -> None:
-        self.root = tk.Tk()
-        self.root.withdraw()
-        self.button = tk.Button(self.root)
-
-    def tearDown(self) -> None:
-        self.root.destroy()
-
-    def test_calls_refresh_and_schedules_next_poll(self) -> None:
-        self.root.after = MagicMock()
-        with patch("main._refrescar_estado_boton_subir") as mock_refresh:
-            main._poll_estado_boton_subir(self.root, self.button)
-
-        mock_refresh.assert_called_once_with(self.button)
-        self.root.after.assert_called_once()
-        scheduled_delay = self.root.after.call_args[0][0]
-        self.assertEqual(scheduled_delay, main._POLL_INTERVAL_MS)
+# Nota: la clase `PollEstadoBotonSubirTest` se eliminó al refactorizar
+# main(). El polling ahora vive INLINE dentro de `abrir_activos_fijos`
+# (scoped al frame, se cancela al destruirlo), por lo que ya no existe
+# `_poll_estado_boton_subir`. La función `_refrescar_estado_boton_subir`
+# sí se conserva — los tests de su comportamiento siguen en
+# `RefrescarEstadoBotonSubirTest`.
 
 
 class SubirASapFlagTest(unittest.TestCase):
@@ -957,6 +943,129 @@ class ControlSoxDialogTest(unittest.TestCase):
             self.assertEqual(frame_sox.hasta_entry.get_date(), date.today())
         finally:
             frame_sox.destroy()
+
+
+class AbrirActivosFijosTest(unittest.TestCase):
+    """`abrir_activos_fijos(root, frame_menu)` reemplaza la vista del menú
+    por un sub-formulario con dos botones: Extraer (`extraer_lsmw_a_txt`)
+    y Creación de Activo (`subir_a_sap`), y arranca polling scoped al
+    frame para habilitar/deshabilitar Creación de Activo según haya
+    LSMW_*.txt en salida/."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        # Stub after para evitar que el polling re-programe callbacks
+        # en el event loop durante los tests.
+        self.root.after = MagicMock(return_value="dummy_id")
+        self.root.after_cancel = MagicMock()
+        self.frame_menu = tk.Frame(self.root)
+        self.frame_menu.pack(fill="both", expand=True)
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_hides_frame_menu_when_invoked(self) -> None:
+        self.assertTrue(self.frame_menu.winfo_manager())
+        frame = main.abrir_activos_fijos(self.root, self.frame_menu)
+        try:
+            self.assertEqual(self.frame_menu.winfo_manager(), "")
+        finally:
+            frame.destroy()
+
+    def test_exposes_extraer_and_creacion_buttons(self) -> None:
+        frame = main.abrir_activos_fijos(self.root, self.frame_menu)
+        try:
+            self.assertIsInstance(frame.btn_extraer, tk.Button)
+            self.assertEqual(
+                frame.btn_extraer.cget("text"), "Extraer información en txt"
+            )
+            self.assertIsInstance(frame.btn_creacion, tk.Button)
+            self.assertEqual(
+                frame.btn_creacion.cget("text"), "Creación de Activo"
+            )
+        finally:
+            frame.destroy()
+
+    def test_creacion_button_starts_disabled(self) -> None:
+        """Mismo comportamiento que el viejo 'Subir a SAP': arranca disabled
+        y el polling lo habilita cuando hay un LSMW_*.txt en salida/."""
+        with patch("main._hay_txt_en_salida", return_value=False):
+            frame = main.abrir_activos_fijos(self.root, self.frame_menu)
+            try:
+                self.assertEqual(str(frame.btn_creacion["state"]), "disabled")
+            finally:
+                frame.destroy()
+
+    def test_creacion_button_enabled_when_txt_present(self) -> None:
+        with patch("main._hay_txt_en_salida", return_value=True):
+            frame = main.abrir_activos_fijos(self.root, self.frame_menu)
+            try:
+                self.assertEqual(str(frame.btn_creacion["state"]), "normal")
+            finally:
+                frame.destroy()
+
+    def test_back_button_destroys_frame_and_reshows_menu(self) -> None:
+        frame = main.abrir_activos_fijos(self.root, self.frame_menu)
+        self.assertEqual(self.frame_menu.winfo_manager(), "")
+
+        frame.btn_atras.invoke()
+
+        self.assertFalse(frame.winfo_exists())
+        self.assertEqual(self.frame_menu.winfo_manager(), "pack")
+
+
+class AbrirSoxMenuTest(unittest.TestCase):
+    """`abrir_sox_menu(root, frame_menu)` reemplaza la vista del menú por
+    un sub-formulario intermedio con un único botón "HUB.PPE.01 Creación
+    de Activos Fijos" que abre el formulario clásico con parámetros."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.frame_menu = tk.Frame(self.root)
+        self.frame_menu.pack(fill="both", expand=True)
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_hides_frame_menu_when_invoked(self) -> None:
+        self.assertTrue(self.frame_menu.winfo_manager())
+        frame = main.abrir_sox_menu(self.root, self.frame_menu)
+        try:
+            self.assertEqual(self.frame_menu.winfo_manager(), "")
+        finally:
+            frame.destroy()
+
+    def test_exposes_hub_ppe_01_button(self) -> None:
+        frame = main.abrir_sox_menu(self.root, self.frame_menu)
+        try:
+            self.assertIsInstance(frame.btn_hub_ppe_01, tk.Button)
+            self.assertIn(
+                "HUB.PPE.01", frame.btn_hub_ppe_01.cget("text")
+            )
+        finally:
+            frame.destroy()
+
+    def test_back_button_destroys_frame_and_reshows_menu(self) -> None:
+        frame = main.abrir_sox_menu(self.root, self.frame_menu)
+        self.assertEqual(self.frame_menu.winfo_manager(), "")
+
+        frame.btn_atras.invoke()
+
+        self.assertFalse(frame.winfo_exists())
+        self.assertEqual(self.frame_menu.winfo_manager(), "pack")
+
+    def test_hub_ppe_01_opens_control_sox(self) -> None:
+        """Click en HUB.PPE.01 debe llamar a `control_sox(root, frame_sox_menu)`."""
+        frame = main.abrir_sox_menu(self.root, self.frame_menu)
+        try:
+            with patch("main.control_sox") as mock_control_sox:
+                frame.btn_hub_ppe_01.invoke()
+            mock_control_sox.assert_called_once_with(self.root, frame)
+        finally:
+            if frame.winfo_exists():
+                frame.destroy()
 
 
 class GenerarReporteSoxHandlerTest(unittest.TestCase):

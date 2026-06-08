@@ -80,14 +80,42 @@ Nota macOS: `tk.Button` ignora `bg`/`activebackground` en aqua por default (sól
 
 ## 4. GUI — `src/main.py`
 
-Ventana principal (480x380, no redimensionable) con cuatro controles:
+Ventana principal (620x480, no redimensionable, título "Gestión de Activos Fijos") con **3 cards horizontales** (mismo ancho, navy primario). Navegación por sub-frames (no Toplevel) con botón "← Atrás" en cada vista.
 
-| Botón | Función | Plataforma |
+### Layout principal
+
+```
+┌─────────────────────────────────────┐
+│           [LOGO 85px]               │
+│      Gestión de Activos Fijos       │
+│                                     │
+│  ┌──────┐ ┌──────┐ ┌──────────┐    │
+│  │Activos│ │Control│ │Reportes  │   │
+│  │Fijos │ │ SOX  │ │(disabled)│    │
+│  └──────┘ └──────┘ └──────────┘    │
+└─────────────────────────────────────┘
+```
+
+### Cards del menú principal
+
+| Card | Función | Plataforma |
 |---|---|---|
-| **Extraer información en txt** | `extraer_lsmw_a_txt` | Cualquier OS |
-| **Subir a SAP** | `subir_a_sap` (arranca *disabled*; polling cada 1s habilita/deshabilita según `LSMW_*.txt` presentes en `salida/`) | Solo Windows |
-| **Control SOX** | `control_sox(root, frame_menu)` — **reemplaza la vista del menú** en la misma ventana por un formulario con Sociedad + Desde + Hasta. Botón "← Atrás" arriba devuelve la vista al menú. **No abre Toplevel** (la versión original lo hacía). | Solo Windows |
-| **Test conexión SAP** | `_test_conexion_sap_handler` (diagnóstico, estilo secundario) | Solo Windows |
+| **Activos Fijos** | Abre `abrir_activos_fijos(root, frame_menu)` — sub-vista con Extraer + Creación de Activo | Cualquier OS / Solo Windows según botón |
+| **Control SOX** | Abre `abrir_sox_menu(root, frame_menu)` — sub-vista intermedia con un único botón "HUB.PPE.01 Creación de Activos Fijos" que abre el form clásico de sociedad+fechas | Solo Windows |
+| **Reportes** | `state="disabled"` — placeholder para futuras funcionalidades | — |
+
+### Sub-vistas
+
+| Sub-vista | Función | Contenido |
+|---|---|---|
+| **Activos Fijos** (`abrir_activos_fijos`) | ← Atrás + logo + título "Activos Fijos" | `[Extraer información en txt]` (función `extraer_lsmw_a_txt`) + `[Creación de Activo]` (función `subir_a_sap`, arranca *disabled*; polling **scoped al frame** cada 1s habilita/deshabilita según `LSMW_*.txt` en salida/; al destruirse el frame, el `<Destroy>` bind cancela el polling para no dejar callbacks sueltos sobre widgets liberados) |
+| **Control SOX intermedio** (`abrir_sox_menu`) | ← Atrás + logo + título "Control SOX" | `[HUB.PPE.01 Creación de Activos Fijos]` → al click abre `control_sox(root, frame_sox_menu)` (el formulario con Sociedad + Desde + Hasta queda como sub-sub-vista; doble back devuelve al menú principal) |
+| **Form Control SOX clásico** (`control_sox`) | ← Atrás + logo + título "Control SOX" | Formulario Sociedad/Desde/Hasta + botón Generar. **Sin cambios** desde el refactor anterior (sigue funcionando con el mismo signature) |
+| **Test conexión SAP** | `_test_conexion_sap_handler` (botón creado pero **NO empaquetado** — oculto en la UI). Se conserva el código para reactivarlo en el futuro sin re-implementarlo | Solo Windows |
+
+### Helpers
+
+- `_crear_header_form(root, frame, parent_frame, titulo, subtitulo=None)` — construye el encabezado consistente de cualquier sub-vista (botón ← Atrás cableado a `frame.destroy() + parent_frame.pack(...)` + logo reusado de `root._logo_ref` + título navy + subtítulo gris opcional). Devuelve el botón Atrás para que el caller pueda deshabilitarlo durante workers.
 
 ### Detalles importantes
 

@@ -50,7 +50,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOGO_PATH = PROJECT_ROOT / "resources" / "logo_hub_isa.png"
 # Altura por defecto del logo en la GUI (en px). El ancho se calcula
 # manteniendo el aspect ratio del archivo original.
-LOGO_ALTURA_PX = 55
+LOGO_ALTURA_PX = 85
 
 
 def cargar_logo(altura_px: int = LOGO_ALTURA_PX):
