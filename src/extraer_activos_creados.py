@@ -33,10 +33,14 @@ DY_PATH/DY_FILENAME en el diálogo wnd[1] o wnd[2].
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+from openpyxl import load_workbook
+from openpyxl.styles import Font
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SALIDA_DIR = PROJECT_ROOT / "salida"
@@ -45,6 +49,30 @@ SALIDA_DIR = PROJECT_ROOT / "salida"
 #   ActivosCreados_{USUARIO}_{YYYYMMDD_HHMMSS}.xlsx
 NOMBRE_PREFIJO = "ActivosCreados"
 NOMBRE_EXTENSION = ".xlsx"
+
+# Nombres de hojas tras el post-procesamiento.
+LOGS_SHEET_NAME = "Logs"
+ACTIVOS_FIJOS_SHEET_NAME = "Activos Fijos"
+
+# Header de la columna que contiene los mensajes del log SM35P. Si el
+# header exacto no se encuentra, se usa el índice de columna por default
+# (COL_MENSAJE_LOG_DEFAULT, 1-based).
+HEADER_MENSAJE_LOG = "Mensaje de log"
+COL_MENSAJE_LOG_DEFAULT = 2  # columna B
+
+# Regex que detecta menciones de activos fijos en el campo "Mensaje de log".
+# Formato observado en el log SAP: "El act.fj. 8048124 0 se ha creado".
+#   - "act.fj." literal (acepta también "act. fj." con espacio opcional)
+#   - espacio + número grande (código del activo, grupo 1)
+#   - espacio + número (subnúmero, grupo 2)
+# `re.IGNORECASE` para tolerar variantes "Act.fj.", "ACT.FJ.", etc.
+PATRON_ACTIVO_LOG = re.compile(
+    r"act\.\s*fj\.\s+(\d+)\s+(\d+)",
+    re.IGNORECASE,
+)
+
+# Headers de la hoja "Activos Fijos" (en orden).
+ACTIVOS_FIJOS_HEADERS = ("Activos Fijos", "Subnúmero")
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -307,6 +335,136 @@ def exportar_log(session, carpeta_destino: str, nombre_archivo: str) -> None:
 # ORQUESTADOR
 # ---------------------------------------------------------------------------
 
+def _esperar_archivo_listo(
+    archivo: Path, timeout_seg: float = 10.0, poll_seg: float = 0.5
+) -> bool:
+    """Espera a que `archivo` exista y su tamaño se estabilice (no esté
+    siendo escrito todavía). SAP a veces tarda 1-3s en cerrar el handle
+    del archivo tras la exportación. Returns True si quedó listo dentro
+    del timeout, False en caso contrario.
+
+    Helper duplicado de `sox_report._esperar_archivo_listo` para
+    mantener cada módulo SAP self-contained — la función es trivial y
+    el costo de duplicación menor.
+    """
+    inicio = time.time()
+    tamano_previo = -1
+    while time.time() - inicio < timeout_seg:
+        if archivo.exists():
+            tamano = archivo.stat().st_size
+            if tamano > 0 and tamano == tamano_previo:
+                return True
+            tamano_previo = tamano
+        time.sleep(poll_seg)
+    return False
+
+
+def procesar_logs(archivo_path: Path) -> dict[str, int]:
+    """Post-procesa el .xlsx exportado por SAP:
+
+      1. Renombra la hoja única exportada por SAP a `"Logs"`.
+      2. Parsea la columna `"Mensaje de log"` buscando `PATRON_ACTIVO_LOG`
+         y extrae todos los pares `(activo_fijo, subnúmero)`.
+      3. Deduplica los pares preservando orden de primera aparición.
+      4. Crea (o reemplaza) una hoja `"Activos Fijos"` con 2 columnas:
+         `Activos Fijos` + `Subnúmero`, headers en bold, datos como ints.
+
+    Si la hoja `Activos Fijos` ya existe (corrida previa), se borra y
+    recrea — idempotente.
+
+    Args:
+        archivo_path: ruta al .xlsx generado por SAP.
+
+    Returns:
+        Dict con stats:
+          - `menciones_total`: cuántas veces el regex matcheó (incluye
+            duplicados).
+          - `activos_unicos`: cuántos pares (activo, sub) únicos hay.
+          - `descartadas`: filas donde el regex no matcheó pero el
+            mensaje sí contenía "act" (no se incrementa por filas no
+            relacionadas).
+
+    Raises:
+        FileNotFoundError: si `archivo_path` no existe.
+    """
+    if not archivo_path.exists():
+        raise FileNotFoundError(
+            f"No existe el archivo a procesar: {archivo_path}"
+        )
+
+    _log(f"Post-procesamiento: procesando '{archivo_path.name}'...")
+    _esperar_archivo_listo(archivo_path)
+
+    wb = load_workbook(archivo_path)
+
+    # Paso 1: renombrar la hoja única a "Logs". Si ya hay una hoja
+    # llamada "Logs", se respeta (probablemente segundo run sobre el
+    # mismo archivo).
+    ws_logs = wb.active
+    if ws_logs.title != LOGS_SHEET_NAME:
+        # Si ya existe una hoja con ese nombre (raro pero posible), la
+        # borramos para evitar el conflicto del rename.
+        if LOGS_SHEET_NAME in wb.sheetnames:
+            del wb[LOGS_SHEET_NAME]
+        ws_logs.title = LOGS_SHEET_NAME
+
+    # Paso 2: localizar la columna de mensaje del log por header. Si no
+    # se encuentra, fallback a columna B (COL_MENSAJE_LOG_DEFAULT).
+    header_row = next(
+        ws_logs.iter_rows(min_row=1, max_row=1, values_only=True), tuple()
+    )
+    col_mensaje_idx = COL_MENSAJE_LOG_DEFAULT
+    for idx, value in enumerate(header_row, start=1):
+        if value == HEADER_MENSAJE_LOG:
+            col_mensaje_idx = idx
+            break
+
+    # Paso 3: escanear filas de datos (a partir de fila 2), aplicar
+    # regex, acumular y deduplicar manteniendo orden.
+    menciones_total = 0
+    vistos: set[tuple[int, int]] = set()
+    activos_unicos: list[tuple[int, int]] = []
+
+    for row in ws_logs.iter_rows(min_row=2, values_only=True):
+        if col_mensaje_idx > len(row):
+            continue
+        mensaje = row[col_mensaje_idx - 1]
+        if not isinstance(mensaje, str):
+            continue
+        for match in PATRON_ACTIVO_LOG.finditer(mensaje):
+            menciones_total += 1
+            par = (int(match.group(1)), int(match.group(2)))
+            if par not in vistos:
+                vistos.add(par)
+                activos_unicos.append(par)
+
+    # Paso 4: crear hoja "Activos Fijos" (idempotente).
+    if ACTIVOS_FIJOS_SHEET_NAME in wb.sheetnames:
+        del wb[ACTIVOS_FIJOS_SHEET_NAME]
+    ws_af = wb.create_sheet(ACTIVOS_FIJOS_SHEET_NAME)
+
+    bold = Font(bold=True)
+    for col_idx, header in enumerate(ACTIVOS_FIJOS_HEADERS, start=1):
+        cell = ws_af.cell(1, col_idx, header)
+        cell.font = bold
+
+    for fila_idx, (activo, sub) in enumerate(activos_unicos, start=2):
+        ws_af.cell(fila_idx, 1, activo)
+        ws_af.cell(fila_idx, 2, sub)
+
+    wb.save(archivo_path)
+
+    _log(
+        f"Post-procesamiento OK: {menciones_total} menciones, "
+        f"{len(activos_unicos)} activos únicos escritos en "
+        f"'{ACTIVOS_FIJOS_SHEET_NAME}'."
+    )
+    return {
+        "menciones_total": menciones_total,
+        "activos_unicos": len(activos_unicos),
+    }
+
+
 def extraer_activos_creados(
     session,
     usuario_sap: str,
@@ -349,6 +507,13 @@ def extraer_activos_creados(
     filtrar_por_usuario(session, usuario_norm)
     abrir_primer_registro(session)
     exportar_log(session, carpeta_destino, nombre_archivo)
+
+    # Etapa post-SAP (pure Python): renombrar hoja a "Logs" + crear
+    # hoja "Activos Fijos" con los pares (activo, subnúmero) parseados
+    # de los mensajes del log.
+    archivo_path = Path(carpeta_destino) / nombre_archivo
+    procesar_logs(archivo_path)
+
     duracion = time.monotonic() - inicio
     _log(f"=== Extracción finalizada en {duracion:.1f}s ===")
 

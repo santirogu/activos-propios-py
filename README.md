@@ -112,8 +112,13 @@ Al pulsar Ejecutar:
    - Filtra por el campo CREATOR con wildcard `*<USUARIO_SAP>`.
    - Abre el primer log de la tabla (F2 sobre la primera fila).
    - Exporta el detalle a `salida/ActivosCreados_<USUARIO>_<YYYYMMDD_HHMMSS>.xlsx`.
-4. Durante la ejecución, los botones Ejecutar y ← Atrás se deshabilitan.
-5. Al terminar muestra messagebox con la ruta completa del archivo creado.
+4. **Post-procesa el .xlsx en Python** (`procesar_logs`):
+   - Renombra la hoja única (`Sheet1`) → `Logs`.
+   - Crea una segunda hoja `Activos Fijos` con 2 columnas (`Activos Fijos`, `Subnúmero`).
+   - Parsea la columna "Mensaje de log" con regex `act\.\s*fj\.\s+(\d+)\s+(\d+)` (case-insensitive) y extrae todos los pares `(activo, subnumero)` (ej. del mensaje `"El act.fj. 8048124 0 se ha creado"` extrae `8048124` y `0`).
+   - Deduplica los pares preservando orden de primera aparición. Si el mismo activo aparece en varios mensajes del log, en la hoja `Activos Fijos` sólo aparece una vez.
+5. Durante la ejecución, los botones Ejecutar y ← Atrás se deshabilitan.
+6. Al terminar muestra messagebox con la ruta completa del archivo creado.
 
 El path se fuerza inyectando `DY_PATH` y `DY_FILENAME` directamente en el diálogo "Save list as file" de SAP (saltando el F4/picker del recording), así el archivo siempre cae en `salida/` con el nombre estándar.
 

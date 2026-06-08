@@ -245,27 +245,35 @@ Replica `resources/ScriptSM35P.vbs`. Filtra el Monitor de Logs BDC (T-code **SM3
 - `BTN_EXPORTAR_TBAR0 = "wnd[0]/tbar[0]/btn[86]"`, `BTN_EXPORTAR_TBAR1 = "wnd[0]/tbar[1]/btn[43]"` — cadena de exportación que abre el diálogo de save (wnd[1]).
 - `CAMPO_DY_PATH = "wnd[1]/usr/ctxtDY_PATH"`, `CAMPO_DY_FILENAME = "wnd[1]/usr/ctxtDY_FILENAME"`, `BTN_CONFIRMAR_WND1 = "wnd[1]/tbar[0]/btn[11]"` — campos y botón del diálogo "Save list as file". Se setean directamente saltando el F4/picker del recording.
 - `NOMBRE_PREFIJO = "ActivosCreados"`, `NOMBRE_EXTENSION = ".xlsx"` — patrón del nombre de archivo: `ActivosCreados_{USUARIO}_{YYYYMMDD_HHMMSS}.xlsx`.
+- `LOGS_SHEET_NAME = "Logs"`, `ACTIVOS_FIJOS_SHEET_NAME = "Activos Fijos"`, `ACTIVOS_FIJOS_HEADERS = ("Activos Fijos", "Subnúmero")`, `HEADER_MENSAJE_LOG = "Mensaje de log"`, `COL_MENSAJE_LOG_DEFAULT = 2` — constantes del post-procesamiento del .xlsx.
+- `PATRON_ACTIVO_LOG = re.compile(r"act\.\s*fj\.\s+(\d+)\s+(\d+)", re.IGNORECASE)` — regex que extrae `(activo_fijo, subnúmero)` de mensajes tipo `"El act.fj. 8048124 0 se ha creado"`. Tolera espacio opcional entre `act.` y `fj.` y es case-insensitive.
 
-### Mapeo del flujo (4 pasos)
+### Mapeo del flujo (5 etapas)
 
-| # | Función | Acciones SAP |
+| # | Función | Acciones SAP / Python |
 |---|---|---|
 | 1 | `abrir_sm35p(session)` | maximize + okcd="sm35p" + Enter |
 | 2 | `filtrar_por_usuario(session, usuario)` | `CREATOR.text = "*<usuario>"` + setFocus + caretPosition + Enter |
 | 3 | `abrir_primer_registro(session)` | setFocus en celda `EDATE[0,0]` + caretPosition + F2 (sendVKey 2) |
 | 4 | `exportar_log(session, carpeta, nombre)` | btn[86] → btn[43] → set `DY_PATH` y `DY_FILENAME` directamente en wnd[1] → btn[11]. **Variante del recording**: salta el F4/picker (wnd[2]) inyectando los campos en wnd[1] para forzar que el archivo caiga en `salida/` con el nombre estándar. |
+| 5 | `procesar_logs(archivo_path)` (post-SAP, pure Python) | Abre el .xlsx generado; renombra la hoja única (Sheet1) → `Logs`; parsea la columna "Mensaje de log" con `PATRON_ACTIVO_LOG` y extrae todos los pares `(activo_fijo, subnúmero)`; deduplica preservando orden; crea (o reemplaza) la hoja `Activos Fijos` con headers en bold + datos como ints. Idempotente. Espera a que el archivo esté listo en disco vía `_esperar_archivo_listo` (SAP puede tardar 1-3s en cerrar el handle tras la exportación). |
 
 ### Helpers
 - `validar_usuario_sap(usuario)` — acepta strings no-vacíos tras strip, sin transformar casing (IDs SAP pueden ser numéricos como `1017209574` o alfanuméricos como `INTC37089`).
 - `_nombre_archivo_extraccion(usuario)` — construye `ActivosCreados_{USUARIO}_{YYYYMMDD_HHMMSS}.xlsx`.
+- `_esperar_archivo_listo(archivo, timeout=10s, poll=0.5s)` — duplicado de `sox_report._esperar_archivo_listo`. Hace polling al `stat().st_size` y devuelve True cuando el tamaño se mantiene constante entre dos ticks (= file ya no está creciendo).
 - `get_sap_session()` — idéntico a `sap_upload.get_sap_session()`.
 
-### Path de salida
-- **Forzado a `<PROJECT_ROOT>/salida/`** vía inyección de `DY_PATH` en el diálogo wnd[1]. El picker F4 del recording era una conveniencia del usuario para navegar; programáticamente no se necesita.
+### Path de salida y estructura del .xlsx final
+- **Path forzado a `<PROJECT_ROOT>/salida/`** vía inyección de `DY_PATH` en el diálogo wnd[1]. El picker F4 del recording era una conveniencia del usuario para navegar; programáticamente no se necesita.
 - Si SAP rechaza el `DY_PATH` directo (porque la transacción exige picker), `findById(CAMPO_DY_PATH)` falla con `RuntimeError` y el error indica el control que no se encontró — habría que añadir fallback con F4 + picker.
+- **Estructura final del archivo** (tras paso 5 / `procesar_logs`):
+  - Hoja `Logs`: copia 1:1 de lo que SAP exportó, sólo renombrada desde "Sheet1". Headers en fila 1 (`Hora de log`, `Mensaje de log`, `Cód.transacción`, ...).
+  - Hoja `Activos Fijos`: 2 columnas (`Activos Fijos`, `Subnúmero`) en bold en fila 1, una fila por par único `(activo, sub)` extraído de los mensajes. Ints, sin formato custom.
 
 ### Limitaciones conocidas
 - Los índices `btn[86]` / `btn[43]` son específicos de la pantalla de detalle SM35P y NO son estándar SAP — si la transacción cambia layout, hay que re-grabar.
+- El regex `PATRON_ACTIVO_LOG` requiere `(activo) (subnumero)` separados por espacio (formato observado en SAP). Si en producción aparecen variantes (ej. `act.fj. 12345` sin subnúmero, o con `/` como separador), hay que ajustar el regex.
 
 ### CLI
 ```bash
