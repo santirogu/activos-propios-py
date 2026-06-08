@@ -69,7 +69,7 @@ python src/main.py
 
 ### Card "Activos Fijos"
 
-Reemplaza la vista del menú por un sub-formulario con dos botones:
+Reemplaza la vista del menú por un sub-formulario con tres botones:
 
 #### "Extraer información en txt"
 
@@ -96,6 +96,31 @@ También se puede ejecutar la carga sin GUI:
 
 ```bash
 python src/sap_upload.py
+```
+
+#### "Extraer Activos Creados"
+
+Tercer botón de la vista. Abre una sub-vista con:
+- Campo **Usuario SAP** (Entry).
+- Botón **Ejecutar**.
+
+Al pulsar Ejecutar:
+1. Valida que el Usuario SAP no esté vacío.
+2. Pide confirmación al usuario.
+3. Lanza un worker en background que (vía SAP GUI Scripting):
+   - Abre la transacción **SM35P** (Monitor de logs BDC).
+   - Filtra por el campo CREATOR con wildcard `*<USUARIO_SAP>`.
+   - Abre el primer log de la tabla (F2 sobre la primera fila).
+   - Exporta el detalle a `salida/ActivosCreados_<USUARIO>_<YYYYMMDD_HHMMSS>.xlsx`.
+4. Durante la ejecución, los botones Ejecutar y ← Atrás se deshabilitan.
+5. Al terminar muestra messagebox con la ruta completa del archivo creado.
+
+El path se fuerza inyectando `DY_PATH` y `DY_FILENAME` directamente en el diálogo "Save list as file" de SAP (saltando el F4/picker del recording), así el archivo siempre cae en `salida/` con el nombre estándar.
+
+También se puede ejecutar sin GUI:
+
+```bash
+python src/extraer_activos_creados.py 1017209574
 ```
 
 ### Card "Control SOX"

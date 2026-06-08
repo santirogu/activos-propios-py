@@ -973,7 +973,9 @@ class AbrirActivosFijosTest(unittest.TestCase):
         finally:
             frame.destroy()
 
-    def test_exposes_extraer_and_creacion_buttons(self) -> None:
+    def test_exposes_all_three_buttons_in_order(self) -> None:
+        """La vista Activos Fijos tiene 3 botones primarios en orden:
+        Extraer información en txt → Creación de Activo → Extraer Activos Creados."""
         frame = main.abrir_activos_fijos(self.root, self.frame_menu)
         try:
             self.assertIsInstance(frame.btn_extraer, tk.Button)
@@ -983,6 +985,11 @@ class AbrirActivosFijosTest(unittest.TestCase):
             self.assertIsInstance(frame.btn_creacion, tk.Button)
             self.assertEqual(
                 frame.btn_creacion.cget("text"), "Creación de Activo"
+            )
+            self.assertIsInstance(frame.btn_extraer_creados, tk.Button)
+            self.assertEqual(
+                frame.btn_extraer_creados.cget("text"),
+                "Extraer Activos Creados",
             )
         finally:
             frame.destroy()
@@ -1013,6 +1020,71 @@ class AbrirActivosFijosTest(unittest.TestCase):
 
         self.assertFalse(frame.winfo_exists())
         self.assertEqual(self.frame_menu.winfo_manager(), "pack")
+
+
+class AbrirExtraerCreadosTest(unittest.TestCase):
+    """`abrir_extraer_creados(root, frame_activos)` reemplaza la vista de
+    Activos Fijos por un sub-formulario con un campo "Usuario SAP" y un
+    botón "Ejecutar". El botón Ejecutar aún no implementa lógica real —
+    muestra un messagebox 'En desarrollo'."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        # Simular el padre (frame_activos) que estaría empacado cuando se
+        # navega desde el menú principal.
+        self.frame_activos = tk.Frame(self.root)
+        self.frame_activos.pack(fill="both", expand=True)
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_hides_frame_activos_when_invoked(self) -> None:
+        self.assertTrue(self.frame_activos.winfo_manager())
+        frame = main.abrir_extraer_creados(self.root, self.frame_activos)
+        try:
+            self.assertEqual(self.frame_activos.winfo_manager(), "")
+        finally:
+            frame.destroy()
+
+    def test_exposes_usuario_sap_field(self) -> None:
+        frame = main.abrir_extraer_creados(self.root, self.frame_activos)
+        try:
+            self.assertIsInstance(frame.usuario_var, tk.StringVar)
+            self.assertIsInstance(frame.usuario_entry, tk.Entry)
+        finally:
+            frame.destroy()
+
+    def test_exposes_ejecutar_button(self) -> None:
+        frame = main.abrir_extraer_creados(self.root, self.frame_activos)
+        try:
+            self.assertIsInstance(frame.btn_ejecutar, tk.Button)
+            self.assertEqual(frame.btn_ejecutar.cget("text"), "Ejecutar")
+        finally:
+            frame.destroy()
+
+    def test_ejecutar_button_calls_extraer_handler(self) -> None:
+        """El botón Ejecutar invoca `_extraer_activos_creados_handler`
+        pasándole el root, el valor del entry, el botón y el btn_atras."""
+        frame = main.abrir_extraer_creados(self.root, self.frame_activos)
+        try:
+            frame.usuario_var.set("1017209574")
+            with patch("main._extraer_activos_creados_handler") as mock_handler:
+                frame.btn_ejecutar.invoke()
+            mock_handler.assert_called_once_with(
+                self.root, "1017209574", frame.btn_ejecutar, frame.btn_atras,
+            )
+        finally:
+            frame.destroy()
+
+    def test_back_button_returns_to_activos_fijos(self) -> None:
+        frame = main.abrir_extraer_creados(self.root, self.frame_activos)
+        self.assertEqual(self.frame_activos.winfo_manager(), "")
+
+        frame.btn_atras.invoke()
+
+        self.assertFalse(frame.winfo_exists())
+        self.assertEqual(self.frame_activos.winfo_manager(), "pack")
 
 
 class AbrirSoxMenuTest(unittest.TestCase):
@@ -1258,6 +1330,112 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
             main._generar_reporte_sox_handler(
                 self.root, "ISA", "01.05.2026", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
+            )
+
+        mock_cm.assert_called_once()
+
+
+class ExtraerActivosCreadosHandlerTest(unittest.TestCase):
+    """Pruebas del handler _extraer_activos_creados_handler:
+    - validación del Usuario SAP (vacío → error, válido → confirmación)
+    - cancelar la confirmación no lanza el worker
+    - el worker pasa el usuario normalizado a `extraer_activos_creados`
+    - errores del worker se muestran y reactivan los botones
+    - botón Atrás se deshabilita durante worker y se reactiva al final
+    """
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        # Stub `root.after` para invocar callbacks inmediatamente.
+        self.root.after = lambda delay, fn, *args: fn(*args)
+        self.button = tk.Button(self.root)
+        self.btn_atras = tk.Button(self.root)
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_shows_error_on_empty_usuario(self) -> None:
+        with patch("main.messagebox.showerror") as mock_err, \
+             patch("main.messagebox.askyesno") as mock_ask:
+            main._extraer_activos_creados_handler(
+                self.root, "", self.button, self.btn_atras,
+            )
+
+        mock_err.assert_called_once()
+        title = mock_err.call_args[0][0]
+        self.assertEqual(title, "Datos inválidos")
+        mock_ask.assert_not_called()
+
+    def test_cancel_confirmation_does_not_start_worker(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=False), \
+             patch("main.threading.Thread") as mock_thread:
+            main._extraer_activos_creados_handler(
+                self.root, "1017209574", self.button, self.btn_atras,
+            )
+
+        mock_thread.assert_not_called()
+
+    def test_happy_path_calls_extraer_with_normalized_usuario(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("extraer_activos_creados.get_sap_session",
+                   return_value=MagicMock()), \
+             patch("extraer_activos_creados.extraer_activos_creados",
+                   return_value=("/tmp", "x.xlsx")) as mock_flow:
+            main._extraer_activos_creados_handler(
+                self.root, "  1017209574  ", self.button, self.btn_atras,
+            )
+
+        # Usuario debe llegar con strip() aplicado.
+        mock_flow.assert_called_once()
+        args = mock_flow.call_args[0]
+        self.assertEqual(args[1], "1017209574")
+
+    def test_worker_disables_buttons_and_reenables_after(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("extraer_activos_creados.get_sap_session",
+                   return_value=MagicMock()), \
+             patch("extraer_activos_creados.extraer_activos_creados",
+                   return_value=("/tmp", "x.xlsx")):
+            main._extraer_activos_creados_handler(
+                self.root, "USR1", self.button, self.btn_atras,
+            )
+
+        # Tras el worker ambos botones deben estar habilitados de nuevo.
+        self.assertEqual(str(self.button["state"]), "normal")
+        self.assertEqual(str(self.btn_atras["state"]), "normal")
+
+    def test_worker_shows_error_when_sap_session_fails(self) -> None:
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showerror") as mock_err, \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("extraer_activos_creados.get_sap_session",
+                   side_effect=RuntimeError("no SAP")):
+            main._extraer_activos_creados_handler(
+                self.root, "USR1", self.button, self.btn_atras,
+            )
+
+        mock_err.assert_called_once()
+        self.assertIn("no SAP", mock_err.call_args[0][1])
+
+    def test_worker_runs_under_sap_com_apartment(self) -> None:
+        """El worker se envuelve en _sap_com_apartment (igual que SOX)."""
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("main._sap_com_apartment") as mock_cm, \
+             patch("extraer_activos_creados.get_sap_session",
+                   return_value=MagicMock()), \
+             patch("extraer_activos_creados.extraer_activos_creados",
+                   return_value=("/tmp", "x.xlsx")):
+            mock_cm.return_value.__enter__ = MagicMock(return_value=None)
+            mock_cm.return_value.__exit__ = MagicMock(return_value=False)
+            main._extraer_activos_creados_handler(
+                self.root, "USR1", self.button, self.btn_atras,
             )
 
         mock_cm.assert_called_once()

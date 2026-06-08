@@ -403,6 +403,95 @@ def _generar_reporte_sox_handler(
     threading.Thread(target=worker, daemon=True).start()
 
 
+def _extraer_activos_creados_handler(
+    root: tk.Tk,
+    usuario_sap: str,
+    button: tk.Button,
+    btn_atras: tk.Button,
+) -> None:
+    """Valida el Usuario SAP y lanza el worker que ejecuta el flujo SM35P.
+
+    Replica el patrón de `_generar_reporte_sox_handler`:
+      - validación previa del input (`validar_usuario_sap`)
+      - confirmación al usuario
+      - deshabilita botón Ejecutar Y botón Atrás durante el worker
+      - worker corre en thread daemon, comunica vía `root.after(0, ...)`
+      - envuelve todo en `_sap_com_apartment()` para CoInitialize en thread
+    """
+    try:
+        from extraer_activos_creados import validar_usuario_sap
+    except ImportError as exc:
+        messagebox.showerror(
+            "Error de import",
+            f"No se pudo importar extraer_activos_creados:\n{exc}",
+        )
+        return
+
+    try:
+        usuario_norm = validar_usuario_sap(usuario_sap)
+    except ValueError as exc:
+        messagebox.showerror("Datos inválidos", str(exc))
+        return
+
+    if not messagebox.askyesno(
+        "Confirmar extracción de activos creados",
+        f"Se ejecutará la transacción SM35P en SAP filtrando los logs "
+        f"por el usuario:\n"
+        f"  • Usuario SAP: {usuario_norm}\n\n"
+        f"Asegúrate de tener SAP abierto y con sesión iniciada.\n\n"
+        f"¿Continuar?",
+    ):
+        return
+
+    button.config(state="disabled")
+    btn_atras.config(state="disabled")
+
+    def show_info(title: str, message: str) -> None:
+        root.after(0, lambda: messagebox.showinfo(title, message))
+
+    def show_error(title: str, message: str) -> None:
+        root.after(0, lambda: messagebox.showerror(title, message))
+
+    def reenable() -> None:
+        def _do():
+            button.config(state="normal")
+            btn_atras.config(state="normal")
+        root.after(0, _do)
+
+    def worker() -> None:
+        with _sap_com_apartment():
+            try:
+                try:
+                    from extraer_activos_creados import (
+                        get_sap_session, extraer_activos_creados,
+                    )
+                except ImportError as exc:
+                    show_error(
+                        "Error de import",
+                        f"No se pudo importar extraer_activos_creados:\n{exc}",
+                    )
+                    return
+
+                try:
+                    session = get_sap_session()
+                    carpeta, nombre = extraer_activos_creados(
+                        session, usuario_norm
+                    )
+                    show_info(
+                        "Extracción completada",
+                        f"Log extraído correctamente.\n\n"
+                        f"Archivo guardado en:\n{carpeta}\\{nombre}",
+                    )
+                except Exception as exc:
+                    show_error(
+                        "Error en la extracción", str(exc)
+                    )
+            finally:
+                reenable()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def _crear_header_form(
     root: tk.Tk,
     frame: tk.Frame,
@@ -504,6 +593,15 @@ def abrir_activos_fijos(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     branding.aplicar_estilo_primario(btn_creacion)
     btn_creacion.pack(pady=(0, 8))
 
+    btn_extraer_creados = tk.Button(
+        frame_activos,
+        text="Extraer Activos Creados",
+        padx=18, pady=8, width=24,
+        command=lambda: abrir_extraer_creados(root, frame_activos),
+    )
+    branding.aplicar_estilo_primario(btn_extraer_creados)
+    btn_extraer_creados.pack(pady=(0, 8))
+
     tk.Label(
         frame_activos,
         textvariable=status_var,
@@ -549,9 +647,69 @@ def abrir_activos_fijos(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     frame_activos.status_var = status_var
     frame_activos.btn_extraer = btn_extraer
     frame_activos.btn_creacion = btn_creacion
+    frame_activos.btn_extraer_creados = btn_extraer_creados
     frame_activos.btn_atras = btn_atras
 
     return frame_activos
+
+
+def abrir_extraer_creados(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
+    """Sub-formulario "Extraer Activos Creados" — accesible desde
+    Activos Fijos. Consulta los activos creados por un usuario SAP.
+
+    Form: campo "Usuario SAP" + botón "Ejecutar".
+
+    NOTA: la lógica del botón Ejecutar aún no está implementada. Por
+    ahora muestra un messagebox "En desarrollo" para que el usuario
+    sepa que es un placeholder intencional (no un bug).
+    """
+    frame_activos.pack_forget()
+
+    frame_extraer = tk.Frame(root, bg=branding.ISA_FONDO)
+    btn_atras = _crear_header_form(
+        root, frame_extraer, frame_activos,
+        titulo="Extraer Activos Creados",
+        subtitulo="Consulta de activos creados por usuario SAP",
+    )
+
+    form = tk.Frame(frame_extraer, bg=branding.ISA_FONDO)
+    form.pack(pady=(12, 12))
+
+    tk.Label(
+        form, text="Usuario SAP:", anchor="e", width=12,
+        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+        font=("Helvetica", 10),
+    ).grid(row=0, column=0, padx=4, pady=8, sticky="e")
+
+    usuario_var = tk.StringVar()
+    usuario_entry = tk.Entry(
+        form, textvariable=usuario_var, width=22,
+        font=("Helvetica", 11),
+    )
+    usuario_entry.grid(row=0, column=1, padx=4, pady=8, sticky="w")
+
+    btn_ejecutar = tk.Button(
+        frame_extraer,
+        text="Ejecutar",
+        padx=18, pady=8, width=16,
+    )
+    btn_ejecutar.config(
+        command=lambda: _extraer_activos_creados_handler(
+            root, usuario_var.get(), btn_ejecutar, btn_atras,
+        )
+    )
+    branding.aplicar_estilo_primario(btn_ejecutar)
+    btn_ejecutar.pack(pady=(12, 0))
+
+    frame_extraer.pack(fill="both", expand=True)
+
+    # Exponer atributos clave para los tests.
+    frame_extraer.usuario_var = usuario_var
+    frame_extraer.usuario_entry = usuario_entry
+    frame_extraer.btn_ejecutar = btn_ejecutar
+    frame_extraer.btn_atras = btn_atras
+
+    return frame_extraer
 
 
 def abrir_sox_menu(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:

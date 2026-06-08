@@ -32,6 +32,7 @@ La autenticación SAP es manual; el script no logea al usuario, solo se conecta 
 │   ├── main.py          # GUI Tkinter: 3 botones + test de conexión
 │   ├── sap_upload.py    # Flujo LSMW completo (10 pasos) vía SAP GUI Scripting
 │   ├── sox_report.py    # Flujo Reporte SOX (4 pasos) vía SAP GUI Scripting
+│   ├── extraer_activos_creados.py  # Flujo SM35P (4 pasos): filtro por usuario + export log
 │   └── branding.py      # Paleta corporativa Hub de ISA + helpers para Tk
 ├── tests/
 │   ├── test_main.py         # 63 pruebas: extracción + handlers de botones + diálogo SOX
@@ -108,7 +109,8 @@ Ventana principal (620x480, no redimensionable, título "Gestión de Activos Fij
 
 | Sub-vista | Función | Contenido |
 |---|---|---|
-| **Activos Fijos** (`abrir_activos_fijos`) | ← Atrás + logo + título "Activos Fijos" | `[Extraer información en txt]` (función `extraer_lsmw_a_txt`) + `[Creación de Activo]` (función `subir_a_sap`, arranca *disabled*; polling **scoped al frame** cada 1s habilita/deshabilita según `LSMW_*.txt` en salida/; al destruirse el frame, el `<Destroy>` bind cancela el polling para no dejar callbacks sueltos sobre widgets liberados) |
+| **Activos Fijos** (`abrir_activos_fijos`) | ← Atrás + logo + título "Activos Fijos" | `[Extraer información en txt]` (función `extraer_lsmw_a_txt`) + `[Creación de Activo]` (función `subir_a_sap`, arranca *disabled*; polling **scoped al frame** cada 1s habilita/deshabilita según `LSMW_*.txt` en salida/; al destruirse el frame, el `<Destroy>` bind cancela el polling para no dejar callbacks sueltos sobre widgets liberados) + `[Extraer Activos Creados]` (abre `abrir_extraer_creados(root, frame_activos)`) |
+| **Extraer Activos Creados** (`abrir_extraer_creados`) | ← Atrás + logo + título "Extraer Activos Creados" | Form: campo `Usuario SAP` (Entry) + botón `[Ejecutar]`. Cableado a `_extraer_activos_creados_handler` que valida el input, pide confirmación, deshabilita Ejecutar+Atrás durante el worker, y ejecuta el flujo `extraer_activos_creados.extraer_activos_creados()` en thread daemon (SAP COM apartment inicializado vía `_sap_com_apartment()`). El flujo abre SM35P, filtra por CREATOR=`*<usuario>`, abre el primer log y exporta el .xlsx vía la cadena `tbar[0]/btn[86]` → `tbar[1]/btn[43]` → F4 → confirmaciones del recording `ScriptSM35P.vbs`. |
 | **Control SOX intermedio** (`abrir_sox_menu`) | ← Atrás + logo + título "Control SOX" | `[HUB.PPE.01 Creación de Activos Fijos]` → al click abre `control_sox(root, frame_sox_menu)` (el formulario con Sociedad + Desde + Hasta queda como sub-sub-vista; doble back devuelve al menú principal) |
 | **Form Control SOX clásico** (`control_sox`) | ← Atrás + logo + título "Control SOX" | Formulario Sociedad/Desde/Hasta + botón Generar. **Sin cambios** desde el refactor anterior (sigue funcionando con el mismo signature) |
 | **Test conexión SAP** | `_test_conexion_sap_handler` (botón creado pero **NO empaquetado** — oculto en la UI). Se conserva el código para reactivarlo en el futuro sin re-implementarlo | Solo Windows |
@@ -229,6 +231,45 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 ### CLI
 ```bash
 python src/sox_report.py ISA 01.05.2026 31.05.2026
+```
+Exit codes: 0 OK, 1 error (validación o SAP), 2 uso incorrecto.
+
+## 6.5. Flujo Extraer Activos Creados — `src/extraer_activos_creados.py`
+
+Replica `resources/ScriptSM35P.vbs`. Filtra el Monitor de Logs BDC (T-code **SM35P**) por un Usuario SAP, abre el primer log de la tabla y exporta el detalle a un archivo (default .xlsx según el recording).
+
+### Constantes clave
+- `T_CODE_SM35P = "sm35p"` — Monitor de sesiones BDC.
+- `CAMPO_CREATOR = "wnd[0]/usr/subSCR_INFO:RSBDC_PROTOCOL:0201/txtD0100-CREATOR"` — campo filtro por usuario. Se setea con `*<usuario_sap>` (el `*` lo añade el código).
+- `CELDA_PRIMER_REGISTRO = "wnd[0]/usr/tabsTAB_PROTOCOL/tabpALL_PROT/ssubSCR_CONTENT:RSBDC_PROTOCOL:0200/tblRSBDC_PROTOCOLTC_PROTOCOL/txtLIST_BDCLD-EDATE[0,0]"` — primera celda de la tabla; F2 sobre ella abre el detalle.
+- `BTN_EXPORTAR_TBAR0 = "wnd[0]/tbar[0]/btn[86]"`, `BTN_EXPORTAR_TBAR1 = "wnd[0]/tbar[1]/btn[43]"` — cadena de exportación que abre el diálogo de save (wnd[1]).
+- `CAMPO_DY_PATH = "wnd[1]/usr/ctxtDY_PATH"`, `CAMPO_DY_FILENAME = "wnd[1]/usr/ctxtDY_FILENAME"`, `BTN_CONFIRMAR_WND1 = "wnd[1]/tbar[0]/btn[11]"` — campos y botón del diálogo "Save list as file". Se setean directamente saltando el F4/picker del recording.
+- `NOMBRE_PREFIJO = "ActivosCreados"`, `NOMBRE_EXTENSION = ".xlsx"` — patrón del nombre de archivo: `ActivosCreados_{USUARIO}_{YYYYMMDD_HHMMSS}.xlsx`.
+
+### Mapeo del flujo (4 pasos)
+
+| # | Función | Acciones SAP |
+|---|---|---|
+| 1 | `abrir_sm35p(session)` | maximize + okcd="sm35p" + Enter |
+| 2 | `filtrar_por_usuario(session, usuario)` | `CREATOR.text = "*<usuario>"` + setFocus + caretPosition + Enter |
+| 3 | `abrir_primer_registro(session)` | setFocus en celda `EDATE[0,0]` + caretPosition + F2 (sendVKey 2) |
+| 4 | `exportar_log(session, carpeta, nombre)` | btn[86] → btn[43] → set `DY_PATH` y `DY_FILENAME` directamente en wnd[1] → btn[11]. **Variante del recording**: salta el F4/picker (wnd[2]) inyectando los campos en wnd[1] para forzar que el archivo caiga en `salida/` con el nombre estándar. |
+
+### Helpers
+- `validar_usuario_sap(usuario)` — acepta strings no-vacíos tras strip, sin transformar casing (IDs SAP pueden ser numéricos como `1017209574` o alfanuméricos como `INTC37089`).
+- `_nombre_archivo_extraccion(usuario)` — construye `ActivosCreados_{USUARIO}_{YYYYMMDD_HHMMSS}.xlsx`.
+- `get_sap_session()` — idéntico a `sap_upload.get_sap_session()`.
+
+### Path de salida
+- **Forzado a `<PROJECT_ROOT>/salida/`** vía inyección de `DY_PATH` en el diálogo wnd[1]. El picker F4 del recording era una conveniencia del usuario para navegar; programáticamente no se necesita.
+- Si SAP rechaza el `DY_PATH` directo (porque la transacción exige picker), `findById(CAMPO_DY_PATH)` falla con `RuntimeError` y el error indica el control que no se encontró — habría que añadir fallback con F4 + picker.
+
+### Limitaciones conocidas
+- Los índices `btn[86]` / `btn[43]` son específicos de la pantalla de detalle SM35P y NO son estándar SAP — si la transacción cambia layout, hay que re-grabar.
+
+### CLI
+```bash
+python src/extraer_activos_creados.py 1017209574
 ```
 Exit codes: 0 OK, 1 error (validación o SAP), 2 uso incorrecto.
 
