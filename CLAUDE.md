@@ -287,7 +287,8 @@ Exit codes: 0 OK, 1 error (validación o SAP), 2 uso incorrecto.
 Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que el usuario hizo durante la grabación — inyectamos `DY_PATH` directamente). Para cada par `(activo, subnúmero)` leído de la hoja `Activos Fijos` del último `ActivosCreados_*.xlsx` en `salida/`, sube cada uno de los archivos seleccionados como adjunto SAP vía **AS02** (Cambio Activo Fijo) + **GOS PCATTA_CREA** (Crear Adjunto del Object Services).
 
 ### Constantes clave
-- `T_CODE_AS02 = "as02"` — Cambio Activo Fijo.
+- `T_CODE_AS02 = "/nas02"` — Cambio Activo Fijo. El prefijo `/n` fuerza navegación a transacción **fresca** desde cualquier estado previo. Sin él, si una iteración anterior dejó SAP en la pantalla detalle (porque falló a media ejecución), un `okcd = "as02"` crudo no resetea y la siguiente iteración falla con `findById(ANLN1) → "control not found"`.
+- `GOS_MENU_SETTLE_SECONDS = 0.3` — pausa entre `pressContextButton("%GOS_TOOLBOX")` y `selectContextMenuItem("%GOS_PCATTA_CREA")`. Sin esta pausa el `selectContextMenuItem` falla con `"method got an invalid argument"` porque el menú se construye async y el item solicitado aún no existe.
 - `CAMPO_ANLN1 = "wnd[0]/usr/ctxtANLA-ANLN1"` — número de activo.
 - `CAMPO_ANLN2 = "wnd[0]/usr/ctxtANLA-ANLN2"` — subnúmero.
 - `CAMPO_BUKRS = "wnd[0]/usr/ctxtANLA-BUKRS"` — sociedad.
