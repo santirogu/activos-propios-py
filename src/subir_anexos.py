@@ -52,12 +52,13 @@ SALIDA_DIR = PROJECT_ROOT / "salida"
 # findById(ANLA-ANLN1) falla con "control not found".
 T_CODE_AS02 = "/nas02"
 
-# Pausa breve después de abrir el menú GOS Toolbox antes de seleccionar
-# un item. `pressContextButton` abre el menú de forma asíncrona; sin
+# Pausa después de abrir el menú GOS Toolbox antes de seleccionar un
+# item. `pressContextButton` abre el menú de forma asíncrona; sin
 # pausa, `selectContextMenuItem` puede fallar con "method got an
 # invalid argument" porque el item solicitado aún no existe en el menú
-# en construcción. 0.3s es suficiente en máquinas razonables.
-GOS_MENU_SETTLE_SECONDS = 0.3
+# en construcción. 1s es conservador; si en máquinas lentas sigue
+# fallando, subirlo a 1.5-2s.
+GOS_MENU_SETTLE_SECONDS = 1.0
 
 # Campos del header de AS02 (sociedad + activo + subnúmero).
 CAMPO_ANLN1 = "wnd[0]/usr/ctxtANLA-ANLN1"   # activo
@@ -291,6 +292,11 @@ def adjuntar_archivo(
     _ejecutar("Enter para cargar el activo", wnd0.sendVKey, 0)
 
     # 3. Abrir menú GOS (Servicios para Objeto) + Crear adjunto.
+    # IMPORTANTE: el recording hace findById dos veces (no es solo
+    # estilo VBS). Re-fetchear el shell entre press y select es
+    # necesario porque la referencia se vuelve stale tras
+    # pressContextButton — cachearlo causaba "method got an invalid
+    # argument" al llamar selectContextMenuItem.
     shell = _ejecutar(
         f"Localizar shell del título ({SHELL_TITULAR})",
         session.findById, SHELL_TITULAR,
@@ -299,13 +305,17 @@ def adjuntar_archivo(
         f"Abrir menú GOS Toolbox ({GOS_TOOLBOX})",
         shell.pressContextButton, GOS_TOOLBOX,
     )
-    # Pausa breve: el menú se construye de forma asíncrona; sin esto,
-    # selectContextMenuItem falla con "method got an invalid argument"
-    # porque el item PCATTA_CREA aún no está en el menú.
+    # Pausa: el menú se construye de forma asíncrona; sin esto
+    # selectContextMenuItem falla con "invalid argument".
     time.sleep(GOS_MENU_SETTLE_SECONDS)
+    # Re-fetch del shell (la referencia cacheada se vuelve stale).
+    shell_fresh = _ejecutar(
+        f"Re-localizar shell para selección del item GOS",
+        session.findById, SHELL_TITULAR,
+    )
     _ejecutar(
         f"Seleccionar 'Crear adjunto' ({GOS_PCATTA_CREA})",
-        shell.selectContextMenuItem, GOS_PCATTA_CREA,
+        shell_fresh.selectContextMenuItem, GOS_PCATTA_CREA,
     )
 
     # 4. Un solo F4 desde wnd[1] abre wnd[2] (el diálogo del path).
