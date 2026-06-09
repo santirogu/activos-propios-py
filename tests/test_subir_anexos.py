@@ -20,15 +20,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import subir_anexos  # noqa: E402
 from subir_anexos import (  # noqa: E402
-    BTN_CONFIRMAR_WND1,
     BTN_CONFIRMAR_WND2,
+    BTN_OK_WND1_INTERMEDIO,
     CAMPO_ANLN1,
     CAMPO_ANLN2,
     CAMPO_BUKRS,
     CAMPO_DY_FILENAME,
     CAMPO_DY_PATH,
-    GOS_PCATTA_CREA,
+    CREATE_ATTA,
     GOS_TOOLBOX,
+    PCATTA_CREA,
+    SHELL_GOS_BAR,
     SHELL_TITULAR,
     T_CODE_AS02,
     adjuntar_archivo,
@@ -77,6 +79,13 @@ class _MockElement:
     def pressContextButton(self, ctx_id):
         self._session.actions.append(
             (self._sap_id, "pressContextButton", ctx_id)
+        )
+
+    def pressButton(self, btn_id):
+        """SAP usa `pressButton` para clicks normales en botones de
+        toolbar (distinto de `pressContextButton` que abre menú)."""
+        self._session.actions.append(
+            (self._sap_id, "pressButton", btn_id)
         )
 
     def selectContextMenuItem(self, item_id):
@@ -252,31 +261,57 @@ class AdjuntarArchivoTest(unittest.TestCase):
             session._elements[CAMPO_BUKRS].caretPosition, 3
         )
 
-    def test_opens_gos_attachment_menu(self):
+    def test_opens_gos_with_pressButton_then_contextButton_then_select(self):
+        """Match al recording actualizado (líneas 23-25 del .vbs):
+          - pressButton "%GOS_TOOLBOX" en SHELL_TITULAR (NO pressContextButton)
+          - pressContextButton "CREATE_ATTA" en SHELL_GOS_BAR (otra shell!)
+          - selectContextMenuItem "PCATTA_CREA" (sin prefijo %GOS_)
+        """
         session = MockSAPSession()
         adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
 
-        # GOS toolbox + crear adjunto
         self.assertIn(
-            (SHELL_TITULAR, "pressContextButton", GOS_TOOLBOX),
+            (SHELL_TITULAR, "pressButton", GOS_TOOLBOX),
             session.actions,
         )
         self.assertIn(
-            (SHELL_TITULAR, "selectContextMenuItem", GOS_PCATTA_CREA),
+            (SHELL_GOS_BAR, "pressContextButton", CREATE_ATTA),
+            session.actions,
+        )
+        self.assertIn(
+            (SHELL_GOS_BAR, "selectContextMenuItem", PCATTA_CREA),
             session.actions,
         )
 
-    def test_sends_single_f4_to_wnd1(self):
-        """Tras el GOS attachment, UN solo F4 desde wnd[1] abre wnd[2]
-        (el diálogo del path). El recording actualizado mostró que la
-        cascada wnd[1]→wnd[2]→wnd[3] del recording original era por la
-        navegación manual de carpetas — programáticamente con un F4 basta."""
+    def test_does_not_use_f4_to_open_wnd2(self):
+        """El recording actualizado NO usa F4 en ninguna parte — el
+        wnd[2] se abre presionando btn[0] en wnd[1] (un diálogo
+        intermedio que aparece tras selectContextMenuItem)."""
         session = MockSAPSession()
         adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
 
-        # F4 en wnd[1] sólo (no wnd[2])
-        self.assertIn(("wnd[1]", "sendVKey", 4), session.actions)
-        self.assertNotIn(("wnd[2]", "sendVKey", 4), session.actions)
+        # Ningún sendVKey 4 en ninguna parte del flujo
+        f4_actions = [
+            a for a in session.actions
+            if len(a) >= 3 and a[1] == "sendVKey" and a[2] == 4
+        ]
+        self.assertEqual(f4_actions, [])
+
+    def test_presses_intermediate_wnd1_btn0_before_dy_path(self):
+        """Línea 26 del recording: tras selectContextMenuItem aparece
+        un diálogo wnd[1]; al press btn[0] de su tbar se abre wnd[2]
+        con los campos DY_PATH/DY_FILENAME."""
+        session = MockSAPSession()
+        adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
+
+        # wnd[1] btn[0] debe presionarse ANTES de tocar DY_PATH
+        def idx(action):
+            return session.actions.index(action)
+
+        self.assertLess(
+            idx((BTN_OK_WND1_INTERMEDIO, "press")),
+            idx((CAMPO_DY_PATH, "set_text", r"C:\f.pdf")),
+        )
 
     def test_sets_dy_path_in_wnd2_with_full_path(self):
         """DY_PATH vive en wnd[2] (no wnd[3] como el recording viejo)."""
@@ -291,24 +326,29 @@ class AdjuntarArchivoTest(unittest.TestCase):
         # DY_FILENAME se limpia porque el path ya incluye el nombre
         self.assertEqual(session._elements[CAMPO_DY_FILENAME].text, "")
 
-    def test_confirms_cascade_wnd2_then_wnd1(self):
-        """btn[0] se presiona en wnd[2] → wnd[1] en orden (2 botones, no 3)."""
+    def test_confirms_with_wnd2_btn0_at_end(self):
+        """Tras inyectar DY_PATH y DY_FILENAME en wnd[2], btn[0] de wnd[2]
+        confirma y crea el adjunto. No hay cascada hacia wnd[1] de vuelta
+        (el wnd[1] intermedio se confirmó ANTES, en la etapa que abrió
+        wnd[2])."""
         session = MockSAPSession()
         adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
 
-        # Que NO haya intento de presionar wnd[3]/tbar[0]/btn[0]
+        # wnd[3] no existe en este flujo
         wnd3_presses = [
             a for a in session.actions
             if isinstance(a[0], str) and a[0].startswith("wnd[3]/")
         ]
         self.assertEqual(wnd3_presses, [])
 
-        # Que wnd[2] preceda a wnd[1]
+        # wnd[2] btn[0] se presiona DESPUÉS de setear DY_PATH
         def idx(action):
             return session.actions.index(action)
 
-        self.assertLess(idx((BTN_CONFIRMAR_WND2, "press")),
-                        idx((BTN_CONFIRMAR_WND1, "press")))
+        self.assertLess(
+            idx((CAMPO_DY_PATH, "set_text", r"C:\f.pdf")),
+            idx((BTN_CONFIRMAR_WND2, "press")),
+        )
 
     def test_raises_runtime_error_with_context_when_step_fails(self):
         """Si SAP rechaza algún paso (ej. AS02 no abre), se re-lanza

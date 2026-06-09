@@ -58,10 +58,22 @@ CAMPO_ANLN1 = "wnd[0]/usr/ctxtANLA-ANLN1"   # activo
 CAMPO_ANLN2 = "wnd[0]/usr/ctxtANLA-ANLN2"   # subnúmero
 CAMPO_BUKRS = "wnd[0]/usr/ctxtANLA-BUKRS"   # sociedad
 
-# Shell del menú "Generic Object Services" (icono de toolbox en el título).
+# Botón "Generic Object Services" (icono de toolbox) en la barra de
+# título de AS02. Se invoca con `pressButton` (NO `pressContextButton`).
 SHELL_TITULAR = "wnd[0]/titl/shellcont/shell"
 GOS_TOOLBOX = "%GOS_TOOLBOX"
-GOS_PCATTA_CREA = "%GOS_PCATTA_CREA"  # "Crear adjunto"
+
+# Tras pressButton("%GOS_TOOLBOX"), SAP despliega una segunda shell con
+# la toolbar GOS (botones Crear, Lista, Nota, etc.). Vive en una ruta
+# DIFERENTE a la del título (sin `/titl/`).
+SHELL_GOS_BAR = "wnd[0]/shellcont/shell"
+CREATE_ATTA = "CREATE_ATTA"      # botón "Crear" (abre submenú)
+PCATTA_CREA = "PCATTA_CREA"      # item "Crear anexo" del submenú
+
+# Botón OK del primer diálogo modal que aparece después de
+# selectContextMenuItem("PCATTA_CREA"). Al presionarlo se abre wnd[2]
+# con los campos DY_PATH/DY_FILENAME para inyectar la ruta.
+BTN_OK_WND1_INTERMEDIO = "wnd[1]/tbar[0]/btn[0]"
 
 # Diálogo de selección de archivo (wnd[2] tras 1 F4 desde wnd[1]).
 # Inyectamos DY_PATH con la ruta absoluta del archivo y DY_FILENAME = "".
@@ -73,9 +85,8 @@ GOS_PCATTA_CREA = "%GOS_PCATTA_CREA"  # "Crear adjunto"
 CAMPO_DY_PATH = "wnd[2]/usr/ctxtDY_PATH"
 CAMPO_DY_FILENAME = "wnd[2]/usr/ctxtDY_FILENAME"
 
-# Botones de confirmación de la cascada de vuelta (wnd[2] → wnd[1]).
+# Botón OK que confirma el path inyectado en wnd[2] y crea el adjunto.
 BTN_CONFIRMAR_WND2 = "wnd[2]/tbar[0]/btn[0]"
-BTN_CONFIRMAR_WND1 = "wnd[1]/tbar[0]/btn[0]"
 
 
 # ---------------------------------------------------------------------------
@@ -290,28 +301,41 @@ def adjuntar_archivo(
         lambda: session.findById("wnd[0]").sendVKey(0),
     )
 
-    # 3. Abrir menú GOS (Servicios para Objeto) + Crear adjunto.
-    # Match EXACTO al recording (líneas 23-24 del .vbs): dos llamadas
-    # consecutivas a findById, sin variable intermedia, sin pausa entre
-    # ellas. El menú GOS se cierra solo si no hay selección inmediata.
+    # 3. Acceso al menú GOS y selección "Crear → Crear anexo".
+    # Match exacto al recording actualizado (líneas 23-25 del .vbs):
+    #   a) pressButton "%GOS_TOOLBOX" en wnd[0]/titl/shellcont/shell
+    #      → despliega la toolbar GOS como SEGUNDA shell
+    #        (wnd[0]/shellcont/shell, sin /titl/).
+    #   b) pressContextButton "CREATE_ATTA" en esa segunda shell
+    #      → abre el submenú del botón "Crear".
+    #   c) selectContextMenuItem "PCATTA_CREA" en la misma shell
+    #      → selecciona "Crear anexo".
     _ejecutar(
-        f"Abrir menú GOS Toolbox ({GOS_TOOLBOX})",
-        lambda: session.findById(SHELL_TITULAR).pressContextButton(GOS_TOOLBOX),
+        f"Press 'Toolbox GOS' (pressButton {GOS_TOOLBOX})",
+        lambda: session.findById(SHELL_TITULAR).pressButton(GOS_TOOLBOX),
     )
     _ejecutar(
-        f"Seleccionar 'Crear → Crear anexo' ({GOS_PCATTA_CREA})",
-        lambda: session.findById(SHELL_TITULAR).selectContextMenuItem(GOS_PCATTA_CREA),
+        f"Abrir submenú 'Crear' (pressContextButton {CREATE_ATTA})",
+        lambda: session.findById(SHELL_GOS_BAR).pressContextButton(CREATE_ATTA),
+    )
+    _ejecutar(
+        f"Seleccionar 'Crear anexo' (selectContextMenuItem {PCATTA_CREA})",
+        lambda: session.findById(SHELL_GOS_BAR).selectContextMenuItem(PCATTA_CREA),
     )
 
-    # 4-7. Diálogo del path + cascada de confirmación.
-    # Match EXACTO al recording (líneas 25-31 del .vbs): cada línea hace
-    # su propio findById, sin variables intermedias. Mantenerlo así
-    # garantiza que SAP recibe exactamente la misma secuencia COM que
-    # el recording.
+    # 4. Presionar OK en el diálogo intermedio (wnd[1]) que aparece
+    # tras la selección. Esto abre wnd[2] con los campos DY_PATH/
+    # DY_FILENAME. Línea 26 del recording actualizado.
     _ejecutar(
-        "F4 en wnd[1] para abrir wnd[2]",
-        lambda: session.findById("wnd[1]").sendVKey(4),
+        f"Pulsar OK en wnd[1] intermedio ({BTN_OK_WND1_INTERMEDIO})",
+        lambda: session.findById(BTN_OK_WND1_INTERMEDIO).press(),
     )
+
+    # 5-7. Diálogo del path en wnd[2] + confirmación.
+    # Estos pasos NO están en el recording actualizado (que termina en
+    # línea 26), pero son los que el recording ORIGINAL mostró para
+    # inyectar la ruta del archivo y confirmar: setear DY_PATH +
+    # DY_FILENAME en wnd[2], y press btn[0] para confirmar.
     _ejecutar(
         f"Asignar wnd[2]/DY_PATH = '{ruta_str}'",
         lambda: setattr(session.findById(CAMPO_DY_PATH), "text", ruta_str),
@@ -333,10 +357,6 @@ def adjuntar_archivo(
     _ejecutar(
         f"Pulsar OK en wnd[2] ({BTN_CONFIRMAR_WND2})",
         lambda: session.findById(BTN_CONFIRMAR_WND2).press(),
-    )
-    _ejecutar(
-        f"Pulsar OK en wnd[1] ({BTN_CONFIRMAR_WND1})",
-        lambda: session.findById(BTN_CONFIRMAR_WND1).press(),
     )
 
 
