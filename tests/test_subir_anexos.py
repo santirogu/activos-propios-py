@@ -207,10 +207,50 @@ class AdjuntarArchivoTest(unittest.TestCase):
         self.assertEqual(
             session._elements["wnd[0]/tbar[0]/okcd"].text, T_CODE_AS02
         )
-        # ANLN1 / ANLN2 / BUKRS
+        # ANLN1 + BUKRS (ANLN2 omitido para subnúmero=0; ver
+        # test_skips_anln2_when_zero / test_sets_anln2_when_nonzero).
         self.assertEqual(session._elements[CAMPO_ANLN1].text, "8048124")
-        self.assertEqual(session._elements[CAMPO_ANLN2].text, "0")
         self.assertEqual(session._elements[CAMPO_BUKRS].text, "ISA")
+
+    def test_skips_anln2_when_subnumero_is_zero(self):
+        """Match exacto al recording: con sub=0 no se toca ANLN2 (su
+        default ya es 0). Setearlo descoloca el focus chain en SAP."""
+        session = MockSAPSession()
+        adjuntar_archivo(session, 8048124, 0, "ISA", Path(r"C:\f.pdf"))
+
+        # No debe haber acción set_text sobre ANLN2.
+        anln2_set_actions = [
+            a for a in session.actions
+            if a[0] == CAMPO_ANLN2 and a[1] == "set_text"
+        ]
+        self.assertEqual(anln2_set_actions, [])
+
+    def test_sets_anln2_when_subnumero_nonzero(self):
+        """Si el subnúmero es != 0, sí debe setearse ANLN2."""
+        session = MockSAPSession()
+        adjuntar_archivo(session, 8048124, 3, "ISA", Path(r"C:\f.pdf"))
+
+        self.assertEqual(session._elements[CAMPO_ANLN2].text, "3")
+
+    def test_sets_caret_position_on_bukrs_after_focus(self):
+        """Línea crítica del recording (caretPosition en BUKRS al final
+        del texto) — sin este paso SAP no termina de aceptar el dato
+        antes del Enter."""
+        session = MockSAPSession()
+        adjuntar_archivo(session, 8048124, 0, "ISA", Path(r"C:\f.pdf"))
+
+        # setFocus precede a caretPosition, ambos sobre BUKRS.
+        def idx(action):
+            return session.actions.index(action)
+
+        self.assertLess(
+            idx((CAMPO_BUKRS, "setFocus")),
+            idx((CAMPO_BUKRS, "set_caretPosition", 3)),
+        )
+        # caretPosition = len("ISA") = 3
+        self.assertEqual(
+            session._elements[CAMPO_BUKRS].caretPosition, 3
+        )
 
     def test_opens_gos_attachment_menu(self):
         session = MockSAPSession()

@@ -257,7 +257,13 @@ def adjuntar_archivo(
     )
     _ejecutar("Enter para abrir AS02", wnd0.sendVKey, 0)
 
-    # 2. Set asset data.
+    # 2. Set asset data. ORDEN IMPORTA — match exacto al recording:
+    #    ANLN1 → (ANLN2 si != 0) → BUKRS (text + setFocus + caretPosition).
+    # Si seteamos ANLN2 entre ANLN1 y BUKRS cuando es 0, SAP dispara el
+    # auto-tab que descoloca el focus que ponemos después en BUKRS, y
+    # la línea de `caretPosition` deja de tener efecto. El recording
+    # omite ANLN2 porque su default es 0; replicamos esa omisión y solo
+    # seteamos el campo cuando el subnúmero es != 0.
     anln1_field = _ejecutar(
         f"Localizar campo ANLN1 ({CAMPO_ANLN1})",
         session.findById, CAMPO_ANLN1,
@@ -267,14 +273,17 @@ def adjuntar_archivo(
         lambda: setattr(anln1_field, "text", str(anln1)),
     )
 
-    anln2_field = _ejecutar(
-        f"Localizar campo ANLN2 ({CAMPO_ANLN2})",
-        session.findById, CAMPO_ANLN2,
-    )
-    _ejecutar(
-        f"Asignar ANLN2 = '{anln2}'",
-        lambda: setattr(anln2_field, "text", str(anln2)),
-    )
+    if anln2 != 0:
+        anln2_field = _ejecutar(
+            f"Localizar campo ANLN2 ({CAMPO_ANLN2})",
+            session.findById, CAMPO_ANLN2,
+        )
+        _ejecutar(
+            f"Asignar ANLN2 = '{anln2}' (subnúmero != 0)",
+            lambda: setattr(anln2_field, "text", str(anln2)),
+        )
+    else:
+        _log("  → ANLN2 omitido (subnúmero=0, default de SAP)")
 
     bukrs_field = _ejecutar(
         f"Localizar campo BUKRS ({CAMPO_BUKRS})",
