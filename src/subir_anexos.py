@@ -52,13 +52,6 @@ SALIDA_DIR = PROJECT_ROOT / "salida"
 # findById(ANLA-ANLN1) falla con "control not found".
 T_CODE_AS02 = "/nas02"
 
-# Pausa después de abrir el menú GOS Toolbox antes de seleccionar un
-# item. `pressContextButton` abre el menú de forma asíncrona; sin
-# pausa, `selectContextMenuItem` puede fallar con "method got an
-# invalid argument" porque el item solicitado aún no existe en el menú
-# en construcción. 1s es conservador; si en máquinas lentas sigue
-# fallando, subirlo a 1.5-2s.
-GOS_MENU_SETTLE_SECONDS = 1.0
 
 # Campos del header de AS02 (sociedad + activo + subnúmero).
 CAMPO_ANLN1 = "wnd[0]/usr/ctxtANLA-ANLN1"   # activo
@@ -243,132 +236,111 @@ def adjuntar_archivo(
     ruta_str = str(archivo_path)
     _log(f"  Adjuntando '{archivo_path.name}' a activo {anln1}-{anln2} ({bukrs})")
 
-    # 1. Abrir AS02.
-    okcd = _ejecutar(
-        "Localizar casilla de comandos",
-        session.findById, "wnd[0]/tbar[0]/okcd",
+    # 1. Maximizar + abrir AS02. Cada línea hace su propio findById
+    # para mantener simetría con el .vbs (línea por línea).
+    _ejecutar(
+        "Maximizar wnd[0]",
+        lambda: session.findById("wnd[0]").maximize(),
     )
     _ejecutar(
         f"Escribir T-code '{T_CODE_AS02}' en okcd",
-        lambda: setattr(okcd, "text", T_CODE_AS02),
+        lambda: setattr(
+            session.findById("wnd[0]/tbar[0]/okcd"), "text", T_CODE_AS02
+        ),
     )
-    wnd0 = _ejecutar(
-        "Localizar wnd[0]", session.findById, "wnd[0]",
+    _ejecutar(
+        "Enter para abrir AS02",
+        lambda: session.findById("wnd[0]").sendVKey(0),
     )
-    _ejecutar("Enter para abrir AS02", wnd0.sendVKey, 0)
 
     # 2. Set asset data. ORDEN IMPORTA — match exacto al recording:
     #    ANLN1 → (ANLN2 si != 0) → BUKRS (text + setFocus + caretPosition).
-    # Si seteamos ANLN2 entre ANLN1 y BUKRS cuando es 0, SAP dispara el
-    # auto-tab que descoloca el focus que ponemos después en BUKRS, y
-    # la línea de `caretPosition` deja de tener efecto. El recording
-    # omite ANLN2 porque su default es 0; replicamos esa omisión y solo
-    # seteamos el campo cuando el subnúmero es != 0.
-    anln1_field = _ejecutar(
-        f"Localizar campo ANLN1 ({CAMPO_ANLN1})",
-        session.findById, CAMPO_ANLN1,
-    )
+    # ANLN2 se OMITE cuando es 0 (default de SAP, como el recording).
+    # Setearlo cuando es 0 disparaba el auto-tab y descolocaba el focus
+    # que poníamos después en BUKRS.
     _ejecutar(
         f"Asignar ANLN1 = '{anln1}'",
-        lambda: setattr(anln1_field, "text", str(anln1)),
+        lambda: setattr(session.findById(CAMPO_ANLN1), "text", str(anln1)),
     )
 
     if anln2 != 0:
-        anln2_field = _ejecutar(
-            f"Localizar campo ANLN2 ({CAMPO_ANLN2})",
-            session.findById, CAMPO_ANLN2,
-        )
         _ejecutar(
             f"Asignar ANLN2 = '{anln2}' (subnúmero != 0)",
-            lambda: setattr(anln2_field, "text", str(anln2)),
+            lambda: setattr(session.findById(CAMPO_ANLN2), "text", str(anln2)),
         )
     else:
         _log("  → ANLN2 omitido (subnúmero=0, default de SAP)")
 
-    bukrs_field = _ejecutar(
-        f"Localizar campo BUKRS ({CAMPO_BUKRS})",
-        session.findById, CAMPO_BUKRS,
-    )
     _ejecutar(
         f"Asignar BUKRS = '{bukrs}'",
-        lambda: setattr(bukrs_field, "text", bukrs),
+        lambda: setattr(session.findById(CAMPO_BUKRS), "text", bukrs),
     )
-    _ejecutar("Foco en BUKRS", bukrs_field.setFocus)
+    _ejecutar(
+        "Foco en BUKRS",
+        lambda: session.findById(CAMPO_BUKRS).setFocus(),
+    )
     _ejecutar(
         f"Cursor al final de BUKRS (len={len(bukrs)})",
-        lambda: setattr(bukrs_field, "caretPosition", len(bukrs)),
+        lambda: setattr(
+            session.findById(CAMPO_BUKRS), "caretPosition", len(bukrs)
+        ),
     )
-    _ejecutar("Enter para cargar el activo", wnd0.sendVKey, 0)
+    _ejecutar(
+        "Enter para cargar el activo",
+        lambda: session.findById("wnd[0]").sendVKey(0),
+    )
 
     # 3. Abrir menú GOS (Servicios para Objeto) + Crear adjunto.
-    # IMPORTANTE: el recording hace findById dos veces (no es solo
-    # estilo VBS). Re-fetchear el shell entre press y select es
-    # necesario porque la referencia se vuelve stale tras
-    # pressContextButton — cachearlo causaba "method got an invalid
-    # argument" al llamar selectContextMenuItem.
-    shell = _ejecutar(
-        f"Localizar shell del título ({SHELL_TITULAR})",
-        session.findById, SHELL_TITULAR,
-    )
+    # Match EXACTO al recording (líneas 23-24 del .vbs): dos llamadas
+    # consecutivas a findById, sin variable intermedia, sin sleep.
+    # Probado: añadir sleep entre press/select causa "method got an
+    # invalid argument" porque el menú GOS se cierra solo si no hay
+    # selección inmediata. El recording funciona porque ambas líneas se
+    # ejecutan back-to-back; cualquier delay artificial rompe el flujo.
     _ejecutar(
         f"Abrir menú GOS Toolbox ({GOS_TOOLBOX})",
-        shell.pressContextButton, GOS_TOOLBOX,
-    )
-    # Pausa: el menú se construye de forma asíncrona; sin esto
-    # selectContextMenuItem falla con "invalid argument".
-    time.sleep(GOS_MENU_SETTLE_SECONDS)
-    # Re-fetch del shell (la referencia cacheada se vuelve stale).
-    shell_fresh = _ejecutar(
-        f"Re-localizar shell para selección del item GOS",
-        session.findById, SHELL_TITULAR,
+        lambda: session.findById(SHELL_TITULAR).pressContextButton(GOS_TOOLBOX),
     )
     _ejecutar(
-        f"Seleccionar 'Crear adjunto' ({GOS_PCATTA_CREA})",
-        shell_fresh.selectContextMenuItem, GOS_PCATTA_CREA,
+        f"Seleccionar 'Crear → Crear anexo' ({GOS_PCATTA_CREA})",
+        lambda: session.findById(SHELL_TITULAR).selectContextMenuItem(GOS_PCATTA_CREA),
     )
 
-    # 4. Un solo F4 desde wnd[1] abre wnd[2] (el diálogo del path).
-    wnd1 = _ejecutar(
-        "Localizar wnd[1]", session.findById, "wnd[1]",
-    )
-    _ejecutar("F4 en wnd[1] para abrir wnd[2]", wnd1.sendVKey, 4)
-
-    # 5-6. Inyectar el path completo en DY_PATH (y limpiar DY_FILENAME).
-    path_field = _ejecutar(
-        f"Localizar campo path ({CAMPO_DY_PATH})",
-        session.findById, CAMPO_DY_PATH,
+    # 4-7. Diálogo del path + cascada de confirmación.
+    # Match EXACTO al recording (líneas 25-31 del .vbs): cada línea hace
+    # su propio findById, sin variables intermedias. Mantenerlo así
+    # garantiza que SAP recibe exactamente la misma secuencia COM que
+    # el recording.
+    _ejecutar(
+        "F4 en wnd[1] para abrir wnd[2]",
+        lambda: session.findById("wnd[1]").sendVKey(4),
     )
     _ejecutar(
-        f"Asignar DY_PATH = '{ruta_str}'",
-        lambda: setattr(path_field, "text", ruta_str),
-    )
-
-    filename_field = _ejecutar(
-        f"Localizar campo filename ({CAMPO_DY_FILENAME})",
-        session.findById, CAMPO_DY_FILENAME,
+        f"Asignar wnd[2]/DY_PATH = '{ruta_str}'",
+        lambda: setattr(session.findById(CAMPO_DY_PATH), "text", ruta_str),
     )
     _ejecutar(
-        "Limpiar DY_FILENAME (path ya incluye el nombre)",
-        lambda: setattr(filename_field, "text", ""),
+        "Limpiar wnd[2]/DY_FILENAME (path ya incluye el nombre)",
+        lambda: setattr(session.findById(CAMPO_DY_FILENAME), "text", ""),
     )
-    _ejecutar("Foco en DY_PATH", path_field.setFocus)
+    _ejecutar(
+        "Foco en wnd[2]/DY_PATH",
+        lambda: session.findById(CAMPO_DY_PATH).setFocus(),
+    )
     _ejecutar(
         f"Cursor al final del path (len={len(ruta_str)})",
-        lambda: setattr(path_field, "caretPosition", len(ruta_str)),
+        lambda: setattr(
+            session.findById(CAMPO_DY_PATH), "caretPosition", len(ruta_str)
+        ),
     )
-
-    # 7. Cascada de confirmación: wnd[2] → wnd[1].
-    btn_wnd2 = _ejecutar(
-        f"Localizar btn confirmar wnd[2] ({BTN_CONFIRMAR_WND2})",
-        session.findById, BTN_CONFIRMAR_WND2,
+    _ejecutar(
+        f"Pulsar OK en wnd[2] ({BTN_CONFIRMAR_WND2})",
+        lambda: session.findById(BTN_CONFIRMAR_WND2).press(),
     )
-    _ejecutar("Pulsar OK en wnd[2]", btn_wnd2.press)
-
-    btn_wnd1 = _ejecutar(
-        f"Localizar btn confirmar wnd[1] ({BTN_CONFIRMAR_WND1})",
-        session.findById, BTN_CONFIRMAR_WND1,
+    _ejecutar(
+        f"Pulsar OK en wnd[1] ({BTN_CONFIRMAR_WND1})",
+        lambda: session.findById(BTN_CONFIRMAR_WND1).press(),
     )
-    _ejecutar("Pulsar OK en wnd[1]", btn_wnd1.press)
 
 
 # ---------------------------------------------------------------------------
