@@ -20,12 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import subir_anexos  # noqa: E402
 from subir_anexos import (  # noqa: E402
-    BTN_CONFIRMAR_WND2,
-    BTN_OK_WND1_INTERMEDIO,
+    BTN_CONFIRMAR_WND1,
     CAMPO_ANLN1,
     CAMPO_ANLN2,
     CAMPO_BUKRS,
-    CAMPO_DY_FILENAME,
     CAMPO_DY_PATH,
     CREATE_ATTA,
     GOS_TOOLBOX,
@@ -283,71 +281,67 @@ class AdjuntarArchivoTest(unittest.TestCase):
             session.actions,
         )
 
-    def test_does_not_use_f4_to_open_wnd2(self):
-        """El recording actualizado NO usa F4 en ninguna parte — el
-        wnd[2] se abre presionando btn[0] en wnd[1] (un diálogo
-        intermedio que aparece tras selectContextMenuItem)."""
+    def test_no_uses_f4_anywhere(self):
+        """El recording NO tiene `sendVKey 4` en ninguna parte — todo
+        se hace vía press de botones."""
         session = MockSAPSession()
         adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
 
-        # Ningún sendVKey 4 en ninguna parte del flujo
         f4_actions = [
             a for a in session.actions
             if len(a) >= 3 and a[1] == "sendVKey" and a[2] == 4
         ]
         self.assertEqual(f4_actions, [])
 
-    def test_presses_intermediate_wnd1_btn0_before_dy_path(self):
-        """Línea 26 del recording: tras selectContextMenuItem aparece
-        un diálogo wnd[1]; al press btn[0] de su tbar se abre wnd[2]
-        con los campos DY_PATH/DY_FILENAME."""
-        session = MockSAPSession()
-        adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
-
-        # wnd[1] btn[0] debe presionarse ANTES de tocar DY_PATH
-        def idx(action):
-            return session.actions.index(action)
-
-        self.assertLess(
-            idx((BTN_OK_WND1_INTERMEDIO, "press")),
-            idx((CAMPO_DY_PATH, "set_text", r"C:\f.pdf")),
-        )
-
-    def test_sets_dy_path_in_wnd2_with_full_path(self):
-        """DY_PATH vive en wnd[2] (no wnd[3] como el recording viejo)."""
+    def test_sets_dy_path_in_wnd1(self):
+        """DY_PATH vive en wnd[1], no wnd[2]. SAP abre wnd[1]
+        directamente tras selectContextMenuItem("PCATTA_CREA")."""
         session = MockSAPSession()
         ruta = Path(r"C:\Users\xxx\docs\contrato.pdf")
         adjuntar_archivo(session, 100, 0, "ISA", ruta)
 
-        self.assertTrue(CAMPO_DY_PATH.startswith("wnd[2]/"))
+        self.assertTrue(CAMPO_DY_PATH.startswith("wnd[1]/"))
         self.assertEqual(
             session._elements[CAMPO_DY_PATH].text, str(ruta)
         )
-        # DY_FILENAME se limpia porque el path ya incluye el nombre
-        self.assertEqual(session._elements[CAMPO_DY_FILENAME].text, "")
 
-    def test_confirms_with_wnd2_btn0_at_end(self):
-        """Tras inyectar DY_PATH y DY_FILENAME en wnd[2], btn[0] de wnd[2]
-        confirma y crea el adjunto. No hay cascada hacia wnd[1] de vuelta
-        (el wnd[1] intermedio se confirmó ANTES, en la etapa que abrió
-        wnd[2])."""
+    def test_does_not_touch_wnd2(self):
+        """wnd[2] no existe en este flujo — todo ocurre en wnd[0]
+        (asset) y wnd[1] (path dialog)."""
         session = MockSAPSession()
         adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
 
-        # wnd[3] no existe en este flujo
-        wnd3_presses = [
+        wnd2_actions = [
             a for a in session.actions
-            if isinstance(a[0], str) and a[0].startswith("wnd[3]/")
+            if isinstance(a[0], str) and a[0].startswith("wnd[2]")
         ]
-        self.assertEqual(wnd3_presses, [])
+        self.assertEqual(wnd2_actions, [])
 
-        # wnd[2] btn[0] se presiona DESPUÉS de setear DY_PATH
+    def test_does_not_set_dy_filename(self):
+        """El recording sólo setea DY_PATH (path completo). No hay
+        DY_FILENAME separado."""
+        session = MockSAPSession()
+        adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
+
+        filename_actions = [
+            a for a in session.actions
+            if isinstance(a[0], str) and "DY_FILENAME" in a[0]
+        ]
+        self.assertEqual(filename_actions, [])
+
+    def test_confirms_with_wnd1_btn0_at_end(self):
+        """btn[0] de wnd[1] confirma el path inyectado y crea el adjunto.
+        Es la ÚNICA confirmación — no hay cascada hacia más ventanas."""
+        session = MockSAPSession()
+        adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
+
+        # btn[0] de wnd[1] se presiona DESPUÉS de setear DY_PATH
         def idx(action):
             return session.actions.index(action)
 
         self.assertLess(
             idx((CAMPO_DY_PATH, "set_text", r"C:\f.pdf")),
-            idx((BTN_CONFIRMAR_WND2, "press")),
+            idx((BTN_CONFIRMAR_WND1, "press")),
         )
 
     def test_raises_runtime_error_with_context_when_step_fails(self):

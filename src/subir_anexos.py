@@ -70,23 +70,14 @@ SHELL_GOS_BAR = "wnd[0]/shellcont/shell"
 CREATE_ATTA = "CREATE_ATTA"      # botón "Crear" (abre submenú)
 PCATTA_CREA = "PCATTA_CREA"      # item "Crear anexo" del submenú
 
-# Botón OK del primer diálogo modal que aparece después de
-# selectContextMenuItem("PCATTA_CREA"). Al presionarlo se abre wnd[2]
-# con los campos DY_PATH/DY_FILENAME para inyectar la ruta.
-BTN_OK_WND1_INTERMEDIO = "wnd[1]/tbar[0]/btn[0]"
+# Tras `selectContextMenuItem("PCATTA_CREA")`, SAP abre directamente
+# `wnd[1]` con el campo DY_PATH editable. NO existe `wnd[2]`, NO hay
+# cascada de F4, NO hay DY_FILENAME separado — el path completo va en
+# DY_PATH y un único btn[0] confirma y crea el adjunto.
+CAMPO_DY_PATH = "wnd[1]/usr/ctxtDY_PATH"
 
-# Diálogo de selección de archivo (wnd[2] tras 1 F4 desde wnd[1]).
-# Inyectamos DY_PATH con la ruta absoluta del archivo y DY_FILENAME = "".
-#
-# NOTA: el recording original (que el usuario hizo navegando carpetas)
-# tenía wnd[3] como destino, porque el picker añadía un nivel de
-# profundidad. El recording actualizado (sin navegación, path directo)
-# muestra que con UN solo F4 se llega directamente al diálogo del path.
-CAMPO_DY_PATH = "wnd[2]/usr/ctxtDY_PATH"
-CAMPO_DY_FILENAME = "wnd[2]/usr/ctxtDY_FILENAME"
-
-# Botón OK que confirma el path inyectado en wnd[2] y crea el adjunto.
-BTN_CONFIRMAR_WND2 = "wnd[2]/tbar[0]/btn[0]"
+# Botón OK de wnd[1] que confirma el path inyectado y crea el adjunto.
+BTN_CONFIRMAR_WND1 = "wnd[1]/tbar[0]/btn[0]"
 
 
 # ---------------------------------------------------------------------------
@@ -223,15 +214,19 @@ def adjuntar_archivo(
     """Adjunta `archivo_path` al activo fijo (`anln1`, `anln2`) de la
     sociedad `bukrs` en SAP, vía AS02 + GOS.
 
-    Secuencia (1:1 del recording actualizado, sin navegación manual de
-    carpetas):
-      1. okcd = "as02" + Enter
-      2. Set `ANLA-ANLN1`, `ANLA-ANLN2`, `ANLA-BUKRS` + Enter (carga el activo)
-      3. `pressContextButton("%GOS_TOOLBOX")` + `selectContextMenuItem("%GOS_PCATTA_CREA")`
-      4. F4 en wnd[1] → abre wnd[2] (diálogo del path)
-      5. Set `wnd[2]/usr/ctxtDY_PATH` = ruta absoluta del archivo
-      6. Set `wnd[2]/usr/ctxtDY_FILENAME` = "" (path ya incluye el filename)
-      7. btn[0] en wnd[2] → wnd[1] (cascada de confirmación)
+    Secuencia 1:1 del recording (líneas 15-29 del `Scriptanexo.vbs`):
+      1. okcd = "/nas02" + sendVKey 0 (abre AS02 fresca)
+      2. Set ANLN1 (siempre), ANLN2 (sólo si != 0), BUKRS + setFocus +
+         caretPosition + sendVKey 0 (carga el activo)
+      3. `SHELL_TITULAR.pressButton("%GOS_TOOLBOX")` → despliega la
+         toolbar GOS como segunda shell `SHELL_GOS_BAR`
+      4. `SHELL_GOS_BAR.pressContextButton("CREATE_ATTA")` → abre
+         submenú "Crear"
+      5. `SHELL_GOS_BAR.selectContextMenuItem("PCATTA_CREA")` → selecciona
+         "Crear anexo" → SAP abre wnd[1] con DY_PATH
+      6. Set `wnd[1]/usr/ctxtDY_PATH` = ruta absoluta del archivo +
+         setFocus + caretPosition al final
+      7. `wnd[1]/tbar[0]/btn[0].press` → confirma y crea el adjunto
 
     Args:
         session: sesión SAP GUI.
@@ -323,29 +318,16 @@ def adjuntar_archivo(
         lambda: session.findById(SHELL_GOS_BAR).selectContextMenuItem(PCATTA_CREA),
     )
 
-    # 4. Presionar OK en el diálogo intermedio (wnd[1]) que aparece
-    # tras la selección. Esto abre wnd[2] con los campos DY_PATH/
-    # DY_FILENAME. Línea 26 del recording actualizado.
+    # 4. Tras `selectContextMenuItem("PCATTA_CREA")`, SAP abre wnd[1]
+    # directamente con el campo DY_PATH. Inyectamos la ruta absoluta,
+    # ponemos foco + caret al final, y confirmamos con btn[0].
+    # Líneas 26-29 del recording actualizado.
     _ejecutar(
-        f"Pulsar OK en wnd[1] intermedio ({BTN_OK_WND1_INTERMEDIO})",
-        lambda: session.findById(BTN_OK_WND1_INTERMEDIO).press(),
-    )
-
-    # 5-7. Diálogo del path en wnd[2] + confirmación.
-    # Estos pasos NO están en el recording actualizado (que termina en
-    # línea 26), pero son los que el recording ORIGINAL mostró para
-    # inyectar la ruta del archivo y confirmar: setear DY_PATH +
-    # DY_FILENAME en wnd[2], y press btn[0] para confirmar.
-    _ejecutar(
-        f"Asignar wnd[2]/DY_PATH = '{ruta_str}'",
+        f"Asignar wnd[1]/DY_PATH = '{ruta_str}'",
         lambda: setattr(session.findById(CAMPO_DY_PATH), "text", ruta_str),
     )
     _ejecutar(
-        "Limpiar wnd[2]/DY_FILENAME (path ya incluye el nombre)",
-        lambda: setattr(session.findById(CAMPO_DY_FILENAME), "text", ""),
-    )
-    _ejecutar(
-        "Foco en wnd[2]/DY_PATH",
+        "Foco en wnd[1]/DY_PATH",
         lambda: session.findById(CAMPO_DY_PATH).setFocus(),
     )
     _ejecutar(
@@ -355,8 +337,8 @@ def adjuntar_archivo(
         ),
     )
     _ejecutar(
-        f"Pulsar OK en wnd[2] ({BTN_CONFIRMAR_WND2})",
-        lambda: session.findById(BTN_CONFIRMAR_WND2).press(),
+        f"Pulsar OK en wnd[1] ({BTN_CONFIRMAR_WND1}) → crea el adjunto",
+        lambda: session.findById(BTN_CONFIRMAR_WND1).press(),
     )
 
 
