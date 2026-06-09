@@ -1001,14 +1001,17 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     branding.aplicar_estilo_primario(btn_subir)
     btn_subir.pack(pady=(14, 6))
 
+    # Status label legible: 10pt bold + padding inferior amplio para
+    # que no quede pegado al borde de la ventana (donde se renderiza
+    # recortado / borroso).
     tk.Label(
         frame_anexos,
         textvariable=status_var,
-        font=("Helvetica", 9),
+        font=("Helvetica", 10, "bold"),
         fg=branding.ISA_VERDE_OK,
         bg=branding.ISA_FONDO,
         wraplength=560,
-    ).pack(pady=(4, 0))
+    ).pack(pady=(10, 20))
 
     frame_anexos.pack(fill="both", expand=True)
 
@@ -1274,7 +1277,11 @@ def main() -> None:
     _install_tk_exception_handler(root)
     root.title("Gestión de Activos Fijos")
     # Ventana algo más ancha para acomodar 3 cards horizontales.
-    root.geometry("620x480")
+    # Altura 580 (era 480) para acomodar la vista "Subir Anexos" que
+    # tiene combobox + 2 filas de botones + listbox + botón + status —
+    # con 480 el label de status quedaba clippeado al borde inferior.
+    # Las otras vistas se ven OK con el aire extra.
+    root.geometry("620x580")
     root.resizable(False, False)
     root.configure(bg=branding.ISA_FONDO)
 
