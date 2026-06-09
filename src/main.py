@@ -612,16 +612,24 @@ def _subir_anexos_handler(
                     if stats["detalles_fallos"]:
                         resumen += "\nPrimeros fallos:\n"
                         for activo, sub, archivo, error in (
-                            stats["detalles_fallos"][:5]
+                            stats["detalles_fallos"][:3]
                         ):
                             nombre = Path(archivo).name
-                            resumen += (
-                                f"  • {activo}-{sub} / {nombre}\n"
+                            # Truncar mensajes muy largos para que el
+                            # messagebox quepa en pantalla.
+                            err_corto = (
+                                error if len(error) <= 220
+                                else error[:220] + "…"
                             )
-                        if len(stats["detalles_fallos"]) > 5:
                             resumen += (
-                                f"  • ... y "
-                                f"{len(stats['detalles_fallos']) - 5} más\n"
+                                f"\n  • {activo}-{sub} / {nombre}:\n"
+                                f"    {err_corto}\n"
+                            )
+                        if len(stats["detalles_fallos"]) > 3:
+                            resumen += (
+                                f"\n  ... y "
+                                f"{len(stats['detalles_fallos']) - 3} más "
+                                f"(ver consola para detalles)\n"
                             )
 
                     if stats["fallidos"] == 0:

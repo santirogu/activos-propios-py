@@ -22,7 +22,6 @@ import subir_anexos  # noqa: E402
 from subir_anexos import (  # noqa: E402
     BTN_CONFIRMAR_WND1,
     BTN_CONFIRMAR_WND2,
-    BTN_CONFIRMAR_WND3,
     CAMPO_ANLN1,
     CAMPO_ANLN2,
     CAMPO_BUKRS,
@@ -227,37 +226,47 @@ class AdjuntarArchivoTest(unittest.TestCase):
             session.actions,
         )
 
-    def test_navigates_f4_cascade_to_wnd3(self):
-        """Tras el GOS attachment, F4 en wnd[1] abre wnd[2], y F4 en
-        wnd[2] abre wnd[3] (donde inyectamos el path)."""
+    def test_sends_single_f4_to_wnd1(self):
+        """Tras el GOS attachment, UN solo F4 desde wnd[1] abre wnd[2]
+        (el diálogo del path). El recording actualizado mostró que la
+        cascada wnd[1]→wnd[2]→wnd[3] del recording original era por la
+        navegación manual de carpetas — programáticamente con un F4 basta."""
         session = MockSAPSession()
         adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
 
-        # F4 en wnd[1] y wnd[2]
+        # F4 en wnd[1] sólo (no wnd[2])
         self.assertIn(("wnd[1]", "sendVKey", 4), session.actions)
-        self.assertIn(("wnd[2]", "sendVKey", 4), session.actions)
+        self.assertNotIn(("wnd[2]", "sendVKey", 4), session.actions)
 
-    def test_sets_dy_path_with_full_path(self):
+    def test_sets_dy_path_in_wnd2_with_full_path(self):
+        """DY_PATH vive en wnd[2] (no wnd[3] como el recording viejo)."""
         session = MockSAPSession()
         ruta = Path(r"C:\Users\xxx\docs\contrato.pdf")
         adjuntar_archivo(session, 100, 0, "ISA", ruta)
 
+        self.assertTrue(CAMPO_DY_PATH.startswith("wnd[2]/"))
         self.assertEqual(
             session._elements[CAMPO_DY_PATH].text, str(ruta)
         )
         # DY_FILENAME se limpia porque el path ya incluye el nombre
         self.assertEqual(session._elements[CAMPO_DY_FILENAME].text, "")
 
-    def test_confirms_cascade_back(self):
-        """btn[0] se presiona en wnd[3] → wnd[2] → wnd[1] en orden."""
+    def test_confirms_cascade_wnd2_then_wnd1(self):
+        """btn[0] se presiona en wnd[2] → wnd[1] en orden (2 botones, no 3)."""
         session = MockSAPSession()
         adjuntar_archivo(session, 100, 0, "ISA", Path(r"C:\f.pdf"))
 
+        # Que NO haya intento de presionar wnd[3]/tbar[0]/btn[0]
+        wnd3_presses = [
+            a for a in session.actions
+            if isinstance(a[0], str) and a[0].startswith("wnd[3]/")
+        ]
+        self.assertEqual(wnd3_presses, [])
+
+        # Que wnd[2] preceda a wnd[1]
         def idx(action):
             return session.actions.index(action)
 
-        self.assertLess(idx((BTN_CONFIRMAR_WND3, "press")),
-                        idx((BTN_CONFIRMAR_WND2, "press")))
         self.assertLess(idx((BTN_CONFIRMAR_WND2, "press")),
                         idx((BTN_CONFIRMAR_WND1, "press")))
 

@@ -57,13 +57,17 @@ SHELL_TITULAR = "wnd[0]/titl/shellcont/shell"
 GOS_TOOLBOX = "%GOS_TOOLBOX"
 GOS_PCATTA_CREA = "%GOS_PCATTA_CREA"  # "Crear adjunto"
 
-# Diálogo final de selección de archivo (wnd[3] tras 2 F4 en cascada).
+# Diálogo de selección de archivo (wnd[2] tras 1 F4 desde wnd[1]).
 # Inyectamos DY_PATH con la ruta absoluta del archivo y DY_FILENAME = "".
-CAMPO_DY_PATH = "wnd[3]/usr/ctxtDY_PATH"
-CAMPO_DY_FILENAME = "wnd[3]/usr/ctxtDY_FILENAME"
+#
+# NOTA: el recording original (que el usuario hizo navegando carpetas)
+# tenía wnd[3] como destino, porque el picker añadía un nivel de
+# profundidad. El recording actualizado (sin navegación, path directo)
+# muestra que con UN solo F4 se llega directamente al diálogo del path.
+CAMPO_DY_PATH = "wnd[2]/usr/ctxtDY_PATH"
+CAMPO_DY_FILENAME = "wnd[2]/usr/ctxtDY_FILENAME"
 
-# Botones de confirmación de la cascada de vuelta.
-BTN_CONFIRMAR_WND3 = "wnd[3]/tbar[0]/btn[0]"
+# Botones de confirmación de la cascada de vuelta (wnd[2] → wnd[1]).
 BTN_CONFIRMAR_WND2 = "wnd[2]/tbar[0]/btn[0]"
 BTN_CONFIRMAR_WND1 = "wnd[1]/tbar[0]/btn[0]"
 
@@ -202,15 +206,15 @@ def adjuntar_archivo(
     """Adjunta `archivo_path` al activo fijo (`anln1`, `anln2`) de la
     sociedad `bukrs` en SAP, vía AS02 + GOS.
 
-    Secuencia (1:1 del recording, sin la navegación manual de carpetas):
+    Secuencia (1:1 del recording actualizado, sin navegación manual de
+    carpetas):
       1. okcd = "as02" + Enter
       2. Set `ANLA-ANLN1`, `ANLA-ANLN2`, `ANLA-BUKRS` + Enter (carga el activo)
       3. `pressContextButton("%GOS_TOOLBOX")` + `selectContextMenuItem("%GOS_PCATTA_CREA")`
-      4. F4 en wnd[1] → abre wnd[2]
-      5. F4 en wnd[2] → abre wnd[3] (diálogo del path)
-      6. Set `wnd[3]/usr/ctxtDY_PATH` = ruta absoluta del archivo
-      7. Set `wnd[3]/usr/ctxtDY_FILENAME` = "" (path ya incluye el filename)
-      8. btn[0] en wnd[3] → wnd[2] → wnd[1] (cascada de confirmación)
+      4. F4 en wnd[1] → abre wnd[2] (diálogo del path)
+      5. Set `wnd[2]/usr/ctxtDY_PATH` = ruta absoluta del archivo
+      6. Set `wnd[2]/usr/ctxtDY_FILENAME` = "" (path ya incluye el filename)
+      7. btn[0] en wnd[2] → wnd[1] (cascada de confirmación)
 
     Args:
         session: sesión SAP GUI.
@@ -288,18 +292,13 @@ def adjuntar_archivo(
         shell.selectContextMenuItem, GOS_PCATTA_CREA,
     )
 
-    # 4-5. F4 cascada para llegar a wnd[3] (diálogo del path).
+    # 4. Un solo F4 desde wnd[1] abre wnd[2] (el diálogo del path).
     wnd1 = _ejecutar(
         "Localizar wnd[1]", session.findById, "wnd[1]",
     )
     _ejecutar("F4 en wnd[1] para abrir wnd[2]", wnd1.sendVKey, 4)
 
-    wnd2 = _ejecutar(
-        "Localizar wnd[2]", session.findById, "wnd[2]",
-    )
-    _ejecutar("F4 en wnd[2] para abrir wnd[3]", wnd2.sendVKey, 4)
-
-    # 6-7. Inyectar el path completo en DY_PATH (y limpiar DY_FILENAME).
+    # 5-6. Inyectar el path completo en DY_PATH (y limpiar DY_FILENAME).
     path_field = _ejecutar(
         f"Localizar campo path ({CAMPO_DY_PATH})",
         session.findById, CAMPO_DY_PATH,
@@ -323,19 +322,16 @@ def adjuntar_archivo(
         lambda: setattr(path_field, "caretPosition", len(ruta_str)),
     )
 
-    # 8. Cascada de confirmación: wnd[3] → wnd[2] → wnd[1].
-    btn_wnd3 = _ejecutar(
-        f"Localizar btn confirmar wnd[3]", session.findById, BTN_CONFIRMAR_WND3,
-    )
-    _ejecutar("Pulsar OK en wnd[3]", btn_wnd3.press)
-
+    # 7. Cascada de confirmación: wnd[2] → wnd[1].
     btn_wnd2 = _ejecutar(
-        f"Localizar btn confirmar wnd[2]", session.findById, BTN_CONFIRMAR_WND2,
+        f"Localizar btn confirmar wnd[2] ({BTN_CONFIRMAR_WND2})",
+        session.findById, BTN_CONFIRMAR_WND2,
     )
     _ejecutar("Pulsar OK en wnd[2]", btn_wnd2.press)
 
     btn_wnd1 = _ejecutar(
-        f"Localizar btn confirmar wnd[1]", session.findById, BTN_CONFIRMAR_WND1,
+        f"Localizar btn confirmar wnd[1] ({BTN_CONFIRMAR_WND1})",
+        session.findById, BTN_CONFIRMAR_WND1,
     )
     _ejecutar("Pulsar OK en wnd[1]", btn_wnd1.press)
 

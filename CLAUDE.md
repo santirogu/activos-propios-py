@@ -293,10 +293,10 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 - `CAMPO_BUKRS = "wnd[0]/usr/ctxtANLA-BUKRS"` — sociedad.
 - `SHELL_TITULAR = "wnd[0]/titl/shellcont/shell"` — shell del menú GOS (toolbox del título).
 - `GOS_TOOLBOX = "%GOS_TOOLBOX"`, `GOS_PCATTA_CREA = "%GOS_PCATTA_CREA"` — context buttons del menú GOS.
-- `CAMPO_DY_PATH = "wnd[3]/usr/ctxtDY_PATH"`, `CAMPO_DY_FILENAME = "wnd[3]/usr/ctxtDY_FILENAME"` — diálogo final del path. Inyectamos directo aquí en lugar de navegar con el picker (wnd[5]/wnd[6] del recording).
-- `BTN_CONFIRMAR_WND1/2/3 = "wnd[X]/tbar[0]/btn[0]"` — botones de confirmación de la cascada de vuelta.
+- `CAMPO_DY_PATH = "wnd[2]/usr/ctxtDY_PATH"`, `CAMPO_DY_FILENAME = "wnd[2]/usr/ctxtDY_FILENAME"` — diálogo del path. Inyectamos directo aquí en vez de navegar.
+- `BTN_CONFIRMAR_WND1/2 = "wnd[X]/tbar[0]/btn[0]"` — botones de confirmación de la cascada de vuelta.
 
-### Mapeo del flujo (8 etapas por (activo × archivo))
+### Mapeo del flujo (7 etapas por (activo × archivo))
 
 | # | Función | Acciones SAP |
 |---|---|---|
@@ -304,10 +304,11 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 | 2 | id. | Set ANLN1 + ANLN2 + BUKRS + setFocus + caretPosition + Enter (carga el activo) |
 | 3 | id. | `shell.pressContextButton("%GOS_TOOLBOX")` (abre menú GOS) |
 | 4 | id. | `shell.selectContextMenuItem("%GOS_PCATTA_CREA")` (Crear adjunto) |
-| 5 | id. | F4 en wnd[1] → abre wnd[2] (cascada hacia el path dialog) |
-| 6 | id. | F4 en wnd[2] → abre wnd[3] |
-| 7 | id. | Set `DY_PATH = ruta absoluta del archivo` + `DY_FILENAME = ""` + setFocus + caretPosition |
-| 8 | id. | btn[0] wnd[3] → btn[0] wnd[2] → btn[0] wnd[1] (cascada de confirmación) |
+| 5 | id. | UN solo F4 en wnd[1] → abre wnd[2] (diálogo del path) |
+| 6 | id. | Set `wnd[2]/DY_PATH = ruta absoluta del archivo` + `DY_FILENAME = ""` + setFocus + caretPosition |
+| 7 | id. | btn[0] wnd[2] → btn[0] wnd[1] (cascada de confirmación) |
+
+**Importante:** el recording original mostraba 2 F4s y profundidad hasta wnd[3] porque el usuario navegó manualmente por carpetas del file picker. El recording actualizado (sin navegación, path tipeado directo) confirmó que la cadena correcta es **1 F4 + wnd[2] + 2 btn[0]** — fue un fix crítico tras el primer test en SAP real.
 
 ### Helpers
 - `validar_sociedad`, `VALID_SOCIEDADES` — importadas de `sox_report` (única fuente de verdad para la lista de sociedades).
