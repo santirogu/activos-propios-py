@@ -249,7 +249,7 @@ def adjuntar_archivo(
         ),
     )
     _ejecutar(
-        "Enter para abrir AS02",
+        "sendVKey 0 después de okcd (abre AS02)",
         lambda: session.findById("wnd[0]").sendVKey(0),
     )
 
@@ -286,17 +286,14 @@ def adjuntar_archivo(
         ),
     )
     _ejecutar(
-        "Enter para cargar el activo",
+        "sendVKey 0 después de BUKRS (carga el activo)",
         lambda: session.findById("wnd[0]").sendVKey(0),
     )
 
     # 3. Abrir menú GOS (Servicios para Objeto) + Crear adjunto.
     # Match EXACTO al recording (líneas 23-24 del .vbs): dos llamadas
-    # consecutivas a findById, sin variable intermedia, sin sleep.
-    # Probado: añadir sleep entre press/select causa "method got an
-    # invalid argument" porque el menú GOS se cierra solo si no hay
-    # selección inmediata. El recording funciona porque ambas líneas se
-    # ejecutan back-to-back; cualquier delay artificial rompe el flujo.
+    # consecutivas a findById, sin variable intermedia, sin pausa entre
+    # ellas. El menú GOS se cierra solo si no hay selección inmediata.
     _ejecutar(
         f"Abrir menú GOS Toolbox ({GOS_TOOLBOX})",
         lambda: session.findById(SHELL_TITULAR).pressContextButton(GOS_TOOLBOX),
