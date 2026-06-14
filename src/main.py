@@ -148,7 +148,7 @@ def _hay_txt_en_salida() -> bool:
     return OUTPUT_DIR.exists() and any(OUTPUT_DIR.glob("LSMW_*.txt"))
 
 
-def _refrescar_estado_boton_subir(button: tk.Button) -> None:
+def _refrescar_estado_boton_subir(button: tk.Widget) -> None:
     """Sincroniza el estado del botón con la presencia de .txt en salida/.
 
     Si hay un upload en curso, no toca el botón (el worker lo controla).
@@ -256,7 +256,7 @@ def extraer_lsmw_a_txt(status_var: tk.StringVar) -> None:
         _show_unexpected_error("Error inesperado al extraer", exc)
 
 
-def subir_a_sap(root: tk.Tk, status_var: tk.StringVar, button: tk.Button) -> None:
+def subir_a_sap(root: tk.Tk, status_var: tk.StringVar, button: tk.Widget) -> None:
     """Lanza la carga LSMW a SAP en un hilo background.
 
     Confirma con el usuario, deshabilita el botón mientras corre y va
@@ -343,8 +343,8 @@ def _generar_reporte_sox_handler(
     fecha_desde: str,
     fecha_hasta: str,
     status_var: tk.StringVar,
-    button: tk.Button,
-    btn_atras: tk.Button,
+    button: tk.Widget,
+    btn_atras: tk.Widget,
 ) -> None:
     """Valida los inputs y lanza el worker que genera el reporte SOX.
 
@@ -438,8 +438,8 @@ def _generar_reporte_sox_handler(
 def _extraer_activos_creados_handler(
     root: tk.Tk,
     usuario_sap: str,
-    button: tk.Button,
-    btn_atras: tk.Button,
+    button: tk.Widget,
+    btn_atras: tk.Widget,
 ) -> None:
     """Valida el Usuario SAP y lanza el worker que ejecuta el flujo SM35P.
 
@@ -529,8 +529,8 @@ def _subir_anexos_handler(
     sociedad: str,
     archivos: list[Path],
     status_var: tk.StringVar,
-    button: tk.Button,
-    btn_atras: tk.Button,
+    button: tk.Widget,
+    btn_atras: tk.Widget,
 ) -> None:
     """Valida la sociedad + archivos y lanza el worker que ejecuta el
     flujo de subida de anexos a cada activo de la hoja Activos Fijos.
@@ -701,6 +701,96 @@ def _crear_footer_copyright(parent: tk.Misc) -> tk.Label:
     return footer
 
 
+def _crear_card_visual(
+    parent: tk.Frame,
+    *,
+    titulo: str,
+    descripcion: str,
+    btn_texto: str,
+    btn_style: str,
+    command=None,
+    disabled: bool = False,
+) -> branding.RoundedButton:
+    """Construye una "card" del menú principal (estilo maqueta de diseño).
+
+    Estructura vertical de cada card:
+        ┌─────────────────────────┐
+        │                         │
+        │   [ espacio icono ]     │  ← reservado para PNG futuro
+        │                         │
+        │       Título            │  ← 16pt bold navy
+        │                         │
+        │  Descripción centrada   │  ← 10pt gris, multi-línea
+        │  en gris suave.         │
+        │                         │
+        │  [   Botón color    ]   │  ← color según btn_style
+        └─────────────────────────┘
+
+    El borde es plano 1 px en `ISA_GRIS_BORDE` (Tk no soporta
+    drop-shadow nativo; el borde plano es la alternativa más limpia).
+
+    Args:
+        parent: contenedor donde se empaca la card (típicamente un Frame
+            horizontal con las 3 cards).
+        titulo: encabezado grande de la card (ej. "Activos fijos").
+        descripcion: párrafo gris debajo del título. Multi-línea OK.
+        btn_texto: texto del botón al pie (ej. "Acceder  →").
+        btn_style: estilo de RoundedButton ("primary"/"teal"/"purple").
+        command: callback del botón. Ignorado si `disabled=True`.
+        disabled: arranca con el botón en `state="disabled"`.
+
+    Returns:
+        El RoundedButton del botón inferior — útil si el caller necesita
+        re-configurar el comando o el estado más tarde.
+    """
+    card = tk.Frame(
+        parent,
+        bg=branding.ISA_BLANCO,
+        highlightthickness=1,
+        highlightbackground=branding.ISA_GRIS_BORDE,
+        bd=0,
+    )
+    card.pack(side="left", padx=15, ipadx=4, ipady=4)
+
+    # Espacio reservado para el icono futuro. Si en el futuro se añade
+    # un PNG, basta con poner un tk.Label(card, image=icon_ref) acá
+    # dentro. Por ahora el frame queda vacío con altura fija para que
+    # las cards conserven el shape de la maqueta.
+    icon_frame = tk.Frame(card, bg=branding.ISA_BLANCO, height=92)
+    icon_frame.pack(fill="x", padx=24, pady=(28, 12))
+    icon_frame.pack_propagate(False)
+
+    tk.Label(
+        card,
+        text=titulo,
+        font=("Helvetica", 16, "bold"),
+        fg=branding.ISA_AZUL,
+        bg=branding.ISA_BLANCO,
+    ).pack(pady=(0, 12), padx=24)
+
+    tk.Label(
+        card,
+        text=descripcion,
+        font=("Helvetica", 10),
+        fg=branding.ISA_GRIS,
+        bg=branding.ISA_BLANCO,
+        justify="center",
+    ).pack(pady=(0, 28), padx=24)
+
+    boton = branding.RoundedButton(
+        card,
+        text=btn_texto,
+        style=btn_style,
+        padx=24, pady=12, width=260,
+        command=command,
+    )
+    if disabled:
+        boton.config(state="disabled")
+    boton.pack(pady=(0, 28), padx=24)
+
+    return boton
+
+
 def _crear_header_form(
     root: tk.Tk,
     frame: tk.Frame,
@@ -715,10 +805,10 @@ def _crear_header_form(
     para deshabilitarlo durante un worker). El botón ya tiene cableado el
     comando que destruye `frame` y re-empaca `parent_frame`.
     """
-    btn_atras = tk.Button(
-        frame, text="← Atrás", font=("Helvetica", 9), padx=8, pady=2,
+    btn_atras = branding.RoundedButton(
+        frame, text="← Atrás", style="tertiary",
+        font=("Helvetica", 9), padx=8, pady=2,
     )
-    branding.aplicar_estilo_terciario(btn_atras)
     btn_atras.pack(anchor="w", padx=10, pady=(10, 0))
 
     def volver() -> None:
@@ -781,43 +871,48 @@ def abrir_activos_fijos(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
 
     status_var = tk.StringVar(value="")
 
-    btn_extraer = tk.Button(
+    # Width fijo en px para que los 4 botones de esta vista queden
+    # alineados visualmente (el equivalente al `width=24` chars del
+    # tk.Button original — RoundedButton mide en píxeles).
+    _ANCHO_BOTON_ACTIVOS = 260
+
+    btn_extraer = branding.RoundedButton(
         frame_activos,
         text="Extraer información en txt",
+        style="primary",
+        padx=18, pady=8, width=_ANCHO_BOTON_ACTIVOS,
         command=lambda: extraer_lsmw_a_txt(status_var),
-        padx=18, pady=8, width=24,
     )
-    branding.aplicar_estilo_primario(btn_extraer)
     btn_extraer.pack(pady=(8, 8))
 
-    btn_creacion = tk.Button(
+    btn_creacion = branding.RoundedButton(
         frame_activos,
         text="Creación de Activo",
-        padx=18, pady=8, width=24,
-        state="disabled",
+        style="primary",
+        padx=18, pady=8, width=_ANCHO_BOTON_ACTIVOS,
     )
     btn_creacion.config(
-        command=lambda: subir_a_sap(root, status_var, btn_creacion)
+        command=lambda: subir_a_sap(root, status_var, btn_creacion),
+        state="disabled",
     )
-    branding.aplicar_estilo_primario(btn_creacion)
     btn_creacion.pack(pady=(0, 8))
 
-    btn_extraer_creados = tk.Button(
+    btn_extraer_creados = branding.RoundedButton(
         frame_activos,
         text="Extraer Activos Creados",
-        padx=18, pady=8, width=24,
+        style="primary",
+        padx=18, pady=8, width=_ANCHO_BOTON_ACTIVOS,
         command=lambda: abrir_extraer_creados(root, frame_activos),
     )
-    branding.aplicar_estilo_primario(btn_extraer_creados)
     btn_extraer_creados.pack(pady=(0, 8))
 
-    btn_subir_anexos = tk.Button(
+    btn_subir_anexos = branding.RoundedButton(
         frame_activos,
         text="Subir Anexos",
-        padx=18, pady=8, width=24,
+        style="primary",
+        padx=18, pady=8, width=_ANCHO_BOTON_ACTIVOS,
         command=lambda: abrir_subir_anexos(root, frame_activos),
     )
-    branding.aplicar_estilo_primario(btn_subir_anexos)
     btn_subir_anexos.pack(pady=(0, 8))
 
     tk.Label(
@@ -907,17 +1002,17 @@ def abrir_extraer_creados(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     )
     usuario_entry.grid(row=0, column=1, padx=4, pady=8, sticky="w")
 
-    btn_ejecutar = tk.Button(
+    btn_ejecutar = branding.RoundedButton(
         frame_extraer,
         text="Ejecutar",
-        padx=18, pady=8, width=16,
+        style="primary",
+        padx=18, pady=8, width=170,
     )
     btn_ejecutar.config(
         command=lambda: _extraer_activos_creados_handler(
             root, usuario_var.get(), btn_ejecutar, btn_atras,
         )
     )
-    branding.aplicar_estilo_primario(btn_ejecutar)
     btn_ejecutar.pack(pady=(12, 0))
 
     frame_extraer.pack(fill="both", expand=True)
@@ -984,22 +1079,22 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     archivos_frame = tk.Frame(frame_anexos, bg=branding.ISA_FONDO)
     archivos_frame.pack(pady=(8, 0))
 
-    btn_seleccionar = tk.Button(
+    btn_seleccionar = branding.RoundedButton(
         archivos_frame,
         text="Seleccionar archivos",
+        style="tertiary",
         padx=12, pady=4,
         font=("Helvetica", 10),
     )
-    branding.aplicar_estilo_terciario(btn_seleccionar)
     btn_seleccionar.grid(row=0, column=0, padx=4, sticky="w")
 
-    btn_quitar = tk.Button(
+    btn_quitar = branding.RoundedButton(
         archivos_frame,
         text="Quitar seleccionado",
+        style="tertiary",
         padx=12, pady=4,
         font=("Helvetica", 10),
     )
-    branding.aplicar_estilo_terciario(btn_quitar)
     btn_quitar.grid(row=0, column=1, padx=4, sticky="w")
 
     archivos_listbox = tk.Listbox(
@@ -1039,10 +1134,11 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     # --- Status + botón Subir ---
     status_var = tk.StringVar(value="")
 
-    btn_subir = tk.Button(
+    btn_subir = branding.RoundedButton(
         frame_anexos,
         text="Subir Anexos a SAP",
-        padx=18, pady=8, width=22,
+        style="primary",
+        padx=18, pady=8, width=235,
     )
     btn_subir.config(
         command=lambda: _subir_anexos_handler(
@@ -1054,7 +1150,6 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
             btn_atras,
         )
     )
-    branding.aplicar_estilo_primario(btn_subir)
     btn_subir.pack(pady=(14, 6))
 
     # Status label legible: 10pt bold + padding inferior amplio para
@@ -1103,13 +1198,13 @@ def abrir_sox_menu(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
         subtitulo="Procesos de control y auditoría",
     )
 
-    btn_hub_ppe_01 = tk.Button(
+    btn_hub_ppe_01 = branding.RoundedButton(
         frame_sox_menu,
         text="HUB.PPE.01 Creación de Activos Fijos",
-        padx=18, pady=8, width=32,
+        style="primary",
+        padx=18, pady=8, width=340,
         command=lambda: control_sox(root, frame_sox_menu),
     )
-    branding.aplicar_estilo_primario(btn_hub_ppe_01)
     btn_hub_ppe_01.pack(pady=(12, 8))
 
     frame_sox_menu.pack(fill="both", expand=True)
@@ -1141,14 +1236,14 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     frame_sox = tk.Frame(root, bg=branding.ISA_FONDO)
 
     # --- Botón Atrás (esquina superior izquierda, estilo discreto) ---
-    btn_atras = tk.Button(
+    btn_atras = branding.RoundedButton(
         frame_sox,
         text="← Atrás",
+        style="tertiary",
         font=("Helvetica", 9),
         padx=8,
         pady=2,
     )
-    branding.aplicar_estilo_terciario(btn_atras)
     btn_atras.pack(anchor="w", padx=10, pady=(10, 0))
 
     def volver_al_menu() -> None:
@@ -1262,9 +1357,10 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
 
     status_var = tk.StringVar()
 
-    btn_generar = tk.Button(
+    btn_generar = branding.RoundedButton(
         frame_sox,
         text="Generar Reporte SOX",
+        style="primary",
         padx=18,
         pady=8,
     )
@@ -1279,7 +1375,6 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
             btn_atras,
         )
     )
-    branding.aplicar_estilo_primario(btn_generar)
     btn_generar.pack()
 
     tk.Label(
@@ -1356,12 +1451,12 @@ def main() -> None:
     root = tk.Tk()
     _install_tk_exception_handler(root)
     root.title("Gestión de Activos Fijos")
-    # Ventana algo más ancha para acomodar 3 cards horizontales.
-    # Altura 605 (era 580): el footer de copyright consume ~20 px en
-    # el strip inferior; sin el bump la vista "Subir Anexos" (que ya
-    # llenaba el alto 580) clippeaba el status label. Las otras vistas
-    # se ven igual con el aire extra.
-    root.geometry("620x605")
+    # Geometría 1180x720 — acomoda las 3 cards "anchas" del menú principal
+    # (cada una ~340 px) con su layout vertical de icon + título + párrafo
+    # descriptivo + botón. Las sub-vistas (Activos Fijos, Control SOX,
+    # Subir Anexos, etc.) están centradas en su frame y se ven cómodas
+    # en esta ventana más amplia.
+    root.geometry("1180x720")
     root.resizable(False, False)
     root.configure(bg=branding.ISA_FONDO)
 
@@ -1396,44 +1491,58 @@ def main() -> None:
         bg=branding.ISA_FONDO,
     ).pack(pady=(4, 20))
 
-    # --- 3 cards horizontales (Activos Fijos | Control SOX | Reportes) ---
-    # Cada card es un tk.Button con altura/ancho consistentes para que la
-    # fila se vea pareja. `Reportes` queda en `state="disabled"` por ahora.
+    # --- 3 cards visuales (Activos Fijos | Control SOX | Reportes) ---
+    # Cada card es un tk.Frame con borde plano 1 px gris claro (Tk no
+    # soporta drop-shadow nativo, así que el borde plano es la
+    # alternativa más limpia). Contiene:
+    #   - Espacio reservado para icono (vacío por ahora — al añadir el
+    #     PNG basta con poner el tk.Label dentro de `icon_frame`).
+    #   - Título grande en navy.
+    #   - Párrafo descriptivo gris centrado con wraplength.
+    #   - Botón al fondo con el color de la categoría
+    #     (navy/teal/púrpura) llenando el ancho de la card.
+    # `Reportes` queda con su botón en `state="disabled"` por ahora.
     cards_row = tk.Frame(frame_menu, bg=branding.ISA_FONDO)
-    cards_row.pack(pady=(8, 0))
+    cards_row.pack(pady=(12, 0), padx=20)
 
-    def _crear_card(parent, texto, command=None, disabled=False) -> tk.Button:
-        card = tk.Button(
-            parent,
-            text=texto,
-            padx=12,
-            pady=24,
-            width=16,
-            wraplength=140,
-            command=command,
-        )
-        branding.aplicar_estilo_primario(card)
-        if disabled:
-            card.config(state="disabled")
-        return card
-
-    btn_card_activos = _crear_card(
+    btn_card_activos = _crear_card_visual(
         cards_row,
-        "Activos Fijos",
+        titulo="Activos fijos",
+        descripcion=(
+            "Consulta y gestiona la información\n"
+            "de los activos fijos de la compañía.\n"
+            "Visualiza detalles, ubicaciones,\n"
+            "responsables y más."
+        ),
+        btn_texto="Acceder  →",
+        btn_style="primary",
         command=lambda: abrir_activos_fijos(root, frame_menu),
     )
-    btn_card_activos.pack(side="left", padx=10)
 
-    btn_card_sox = _crear_card(
+    btn_card_sox = _crear_card_visual(
         cards_row,
-        "Control SOX",
+        titulo="Control SOX",
+        descripcion=(
+            "Revisa y da seguimiento a los\n"
+            "controles SOX, evidencia\n"
+            "y cumplimiento normativo."
+        ),
+        btn_texto="Continuar  →",
+        btn_style="teal",
         command=lambda: abrir_sox_menu(root, frame_menu),
     )
-    btn_card_sox.pack(side="left", padx=10)
 
-    btn_card_reportes = _crear_card(
+    btn_card_reportes = _crear_card_visual(
         cards_row,
-        "Reportes",
+        titulo="Reportes",
+        descripcion=(
+            "Genera y consulta reportes\n"
+            "estadísticos y financieros.\n"
+            "Obtén información clave para\n"
+            "la toma de decisiones."
+        ),
+        btn_texto="Ver reportes  →",
+        btn_style="purple",
         disabled=True,
     )
     btn_card_reportes.pack(side="left", padx=10)
@@ -1442,14 +1551,14 @@ def main() -> None:
     # NO se hace .pack para ocultarlo de la UI (puede reactivarse en el
     # futuro re-empaquetándolo). El handler `_test_conexion_sap_handler`
     # tampoco se borra.
-    btn_test = tk.Button(
+    btn_test = branding.RoundedButton(
         frame_menu,
         text="Test conexión SAP",
+        style="tertiary",
         font=("Helvetica", 9),
         padx=10, pady=2,
         command=_test_conexion_sap_handler,
     )
-    branding.aplicar_estilo_terciario(btn_test)
     # btn_test.pack()  # intencionalmente oculto
 
     frame_menu.pack(fill="both", expand=True)

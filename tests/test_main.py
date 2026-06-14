@@ -10,6 +10,7 @@ import openpyxl
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import main  # noqa: E402
+import branding  # noqa: E402
 from main import export_sheet_to_tsv, subir_a_sap  # noqa: E402
 
 
@@ -891,7 +892,7 @@ class ControlSoxDialogTest(unittest.TestCase):
         """El form debe tener un botón Atrás expuesto como `btn_atras`."""
         frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            self.assertIsInstance(frame_sox.btn_atras, tk.Button)
+            self.assertIsInstance(frame_sox.btn_atras, branding.RoundedButton)
         finally:
             frame_sox.destroy()
 
@@ -1010,15 +1011,15 @@ class AbrirActivosFijosTest(unittest.TestCase):
         Extraer información en txt → Creación de Activo → Extraer Activos Creados."""
         frame = main.abrir_activos_fijos(self.root, self.frame_menu)
         try:
-            self.assertIsInstance(frame.btn_extraer, tk.Button)
+            self.assertIsInstance(frame.btn_extraer, branding.RoundedButton)
             self.assertEqual(
                 frame.btn_extraer.cget("text"), "Extraer información en txt"
             )
-            self.assertIsInstance(frame.btn_creacion, tk.Button)
+            self.assertIsInstance(frame.btn_creacion, branding.RoundedButton)
             self.assertEqual(
                 frame.btn_creacion.cget("text"), "Creación de Activo"
             )
-            self.assertIsInstance(frame.btn_extraer_creados, tk.Button)
+            self.assertIsInstance(frame.btn_extraer_creados, branding.RoundedButton)
             self.assertEqual(
                 frame.btn_extraer_creados.cget("text"),
                 "Extraer Activos Creados",
@@ -1090,7 +1091,7 @@ class AbrirExtraerCreadosTest(unittest.TestCase):
     def test_exposes_ejecutar_button(self) -> None:
         frame = main.abrir_extraer_creados(self.root, self.frame_activos)
         try:
-            self.assertIsInstance(frame.btn_ejecutar, tk.Button)
+            self.assertIsInstance(frame.btn_ejecutar, branding.RoundedButton)
             self.assertEqual(frame.btn_ejecutar.cget("text"), "Ejecutar")
         finally:
             frame.destroy()
@@ -1144,7 +1145,7 @@ class AbrirSoxMenuTest(unittest.TestCase):
     def test_exposes_hub_ppe_01_button(self) -> None:
         frame = main.abrir_sox_menu(self.root, self.frame_menu)
         try:
-            self.assertIsInstance(frame.btn_hub_ppe_01, tk.Button)
+            self.assertIsInstance(frame.btn_hub_ppe_01, branding.RoundedButton)
             self.assertIn(
                 "HUB.PPE.01", frame.btn_hub_ppe_01.cget("text")
             )

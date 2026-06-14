@@ -11,6 +11,9 @@ existe, `cargar_logo()` devuelve None y la GUI debe seguir funcionando
 mostrando sólo texto + colores (sin imagen).
 """
 
+import tkinter as tk
+from tkinter import font as tkfont
+
 from paths import bundled_resource_path
 
 # ---------------------------------------------------------------------------
@@ -40,6 +43,18 @@ ISA_FONDO = "#FFFFFF"
 # Verde de éxito (mensaje de status OK), conservado del esquema anterior
 # para no romper la lectura visual de "operación exitosa".
 ISA_VERDE_OK = "#1a7f37"
+
+# Paleta extendida para las cards del menú principal. Cada card tiene un
+# botón con su propio color, replicando la maqueta de diseño (navy /
+# teal / púrpura). Hover = misma tonalidad un step más oscuro.
+ISA_TEAL = "#16A085"
+ISA_TEAL_HOVER = "#138670"
+ISA_MORADO = "#7B6BCC"
+ISA_MORADO_HOVER = "#6857B8"
+
+# Gris muy claro para bordes de cards (flat 1px en vez de drop-shadow,
+# que Tk no soporta nativo).
+ISA_GRIS_BORDE = "#E5E5E5"
 
 
 # ---------------------------------------------------------------------------
@@ -103,38 +118,278 @@ def cargar_logo(altura_px: int = LOGO_ALTURA_PX):
 
 
 # ---------------------------------------------------------------------------
-# Estilos de botón (aplicar después de crear el tk.Button)
+# RoundedButton — botón con esquinas redondeadas (border-radius)
 # ---------------------------------------------------------------------------
 #
-# Nota macOS: `tk.Button` ignora `bg`/`activebackground` en macOS aqua
-# por default (sólo respeta `fg`). En Windows los respeta normalmente.
-# Como la app es Windows-only para los flujos SAP, no rompe nada — sólo
-# se ve más "nativo" en macOS en lugar de coloreado.
+# Tk no soporta `border-radius` nativo en `tk.Button`. Esta clase pinta
+# el botón sobre un `tk.Canvas`: un polígono `smooth=True` con anchor
+# points repetidos en cada esquina (la curva sólo se aplica a las
+# esquinas, los lados quedan rectos) + texto centrado. Los eventos
+# `<Button-1>`/`<ButtonRelease-1>`/`<Enter>`/`<Leave>` simulan el
+# comportamiento de un `tk.Button` (hover, click, disabled).
+#
+# API espejada de `tk.Button` — solo lo que el proyecto realmente usa:
+#   - constructor: `text`, `command`, `style`, `radius`, `padx`, `pady`,
+#     `font`, `width`, `height`, `wraplength`
+#   - `config(state="normal"|"disabled", text=..., command=...)`
+#   - `cget("text"|"state"|"command")`
+#   - `invoke()`  (simula click programático — usado en tests)
+#
+# Estilos predefinidos vía el parámetro `style`:
+#   - "primary"   — fondo navy + texto blanco bold (Extraer, Generar,
+#                   Subir, los 3 cards del menú principal, etc.)
+#   - "tertiary"  — fondo blanco + texto gris (← Atrás, Test conexión,
+#                   Seleccionar archivos, Quitar seleccionado)
 
-def aplicar_estilo_primario(btn) -> None:
-    """Botón de acción principal (Extraer, Subir SAP, Control SOX,
-    Generar Reporte SOX). Fondo navy, texto blanco."""
-    btn.config(
-        bg=ISA_AZUL,
-        fg=ISA_BLANCO,
-        activebackground=ISA_AZUL_HOVER,
-        activeforeground=ISA_BLANCO,
-        relief="flat",
-        bd=0,
-        cursor="hand2",
+_BUTTON_STYLES = {
+    "primary": dict(
+        bg_normal=ISA_AZUL,
+        bg_hover=ISA_AZUL_HOVER,
+        bg_pressed=ISA_AZUL_HOVER,
+        bg_disabled="#B8C3D4",
+        fg_normal=ISA_BLANCO,
+        fg_disabled=ISA_BLANCO,
         font=("Helvetica", 11, "bold"),
-    )
+        padx=14,
+        pady=8,
+    ),
+    "tertiary": dict(
+        bg_normal=ISA_FONDO,
+        bg_hover="#F0F0F0",
+        bg_pressed="#E0E0E0",
+        bg_disabled=ISA_FONDO,
+        fg_normal=ISA_GRIS,
+        fg_disabled=ISA_GRIS_CLARO,
+        font=("Helvetica", 9),
+        padx=10,
+        pady=4,
+    ),
+    "teal": dict(
+        bg_normal=ISA_TEAL,
+        bg_hover=ISA_TEAL_HOVER,
+        bg_pressed=ISA_TEAL_HOVER,
+        bg_disabled="#B8DCC8",
+        fg_normal=ISA_BLANCO,
+        fg_disabled=ISA_BLANCO,
+        font=("Helvetica", 11, "bold"),
+        padx=14,
+        pady=8,
+    ),
+    "purple": dict(
+        bg_normal=ISA_MORADO,
+        bg_hover=ISA_MORADO_HOVER,
+        bg_pressed=ISA_MORADO_HOVER,
+        bg_disabled="#C8C0E5",
+        fg_normal=ISA_BLANCO,
+        fg_disabled=ISA_BLANCO,
+        font=("Helvetica", 11, "bold"),
+        padx=14,
+        pady=8,
+    ),
+}
 
 
-def aplicar_estilo_terciario(btn) -> None:
-    """Botón secundario/diagnóstico (Test conexión, ← Atrás). Estilo
-    discreto en gris para no competir con los botones principales."""
-    btn.config(
-        bg=ISA_FONDO,
-        fg=ISA_GRIS,
-        activebackground="#F0F0F0",
-        activeforeground=ISA_AZUL,
-        relief="flat",
-        bd=1,
-        cursor="hand2",
-    )
+class RoundedButton(tk.Canvas):
+    """`tk.Button` con esquinas redondeadas (default radius=4 px).
+
+    Ver el comment-block superior para la motivación y la API
+    soportada. Cualquier parámetro fuera de la lista documentada (ej.
+    `relief`, `bd`, `activebackground`) NO aplica: el botón se pinta
+    completamente con primitives de Canvas.
+    """
+
+    def __init__(
+        self,
+        parent,
+        *,
+        text: str = "",
+        command=None,
+        style: str = "primary",
+        radius: int = 4,
+        padx: int | None = None,
+        pady: int | None = None,
+        font=None,
+        width: int | None = None,
+        height: int | None = None,
+        wraplength: int | None = None,
+        **canvas_kwargs,
+    ) -> None:
+        if style not in _BUTTON_STYLES:
+            raise ValueError(
+                f"style debe ser uno de {list(_BUTTON_STYLES)!r}, recibí: {style!r}"
+            )
+        cfg = dict(_BUTTON_STYLES[style])
+        if padx is not None:
+            cfg["padx"] = padx
+        if pady is not None:
+            cfg["pady"] = pady
+        if font is not None:
+            cfg["font"] = font
+
+        self._cfg = cfg
+        self._text = text
+        self._command = command
+        self._radius = radius
+        self._wraplength = wraplength
+        self._state = "normal"
+
+        # El bg del Canvas se hereda del parent para que las esquinas
+        # redondeadas se mezclen sin marco visible. Si el caller pasa
+        # `bg=`, lo respetamos.
+        parent_bg = (
+            canvas_kwargs.pop("bg")
+            if "bg" in canvas_kwargs
+            else parent.cget("bg")
+        )
+        super().__init__(
+            parent,
+            highlightthickness=0,
+            bd=0,
+            bg=parent_bg,
+            **canvas_kwargs,
+        )
+
+        self._compute_size_and_draw(width=width, height=height)
+
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+
+    # ---- dibujo --------------------------------------------------------
+
+    def _compute_size_and_draw(self, *, width=None, height=None) -> None:
+        # Medimos el texto con tkfont.Font directamente — no requiere
+        # que el Canvas haya sido layouteado (a diferencia de crear un
+        # text item temporal y leer su bbox, que devuelve (0,0,0,0)
+        # antes del primer update_idletasks).
+        fnt = tkfont.Font(font=self._cfg["font"])
+        text_w = (
+            self._wraplength if self._wraplength
+            else fnt.measure(self._text)
+        )
+        text_h = fnt.metrics("linespace")
+        # Si hay wraplength, el alto puede crecer por wrapping. Estimamos
+        # por longitud del texto vs ancho disponible.
+        if self._wraplength:
+            total_w = fnt.measure(self._text)
+            lineas = max(1, -(-total_w // self._wraplength))  # ceil
+            text_h *= lineas
+
+        w = width if width is not None else int(text_w + 2 * self._cfg["padx"])
+        h = height if height is not None else int(text_h + 2 * self._cfg["pady"])
+        self.config(width=w, height=h)
+
+        # Rectángulo redondeado: polígono smooth con puntos repetidos en
+        # los lados rectos para que el spline curve SOLO las esquinas.
+        self._bg_item = self._create_rounded_rect(
+            1, 1, w - 1, h - 1, self._radius,
+            fill=self._cfg["bg_normal"],
+            outline="",
+        )
+        text_kwargs = dict(
+            text=self._text,
+            font=self._cfg["font"],
+            fill=self._cfg["fg_normal"],
+        )
+        if self._wraplength:
+            text_kwargs["width"] = self._wraplength
+        self._text_item = self.create_text(w / 2, h / 2, **text_kwargs)
+
+    def _create_rounded_rect(self, x1, y1, x2, y2, r, **kwargs):
+        # Truco: con `smooth=True` Tk pasa un B-spline por TODOS los
+        # puntos. Para que sólo se curven las esquinas, repetimos cada
+        # punto de los lados rectos — el spline "se asienta" en esos
+        # puntos repetidos y conserva la línea recta.
+        points = [
+            x1 + r, y1, x1 + r, y1,
+            x2 - r, y1, x2 - r, y1,
+            x2, y1,
+            x2, y1 + r, x2, y1 + r,
+            x2, y2 - r, x2, y2 - r,
+            x2, y2,
+            x2 - r, y2, x2 - r, y2,
+            x1 + r, y2, x1 + r, y2,
+            x1, y2,
+            x1, y2 - r, x1, y2 - r,
+            x1, y1 + r, x1, y1 + r,
+            x1, y1,
+        ]
+        return self.create_polygon(points, smooth=True, **kwargs)
+
+    # ---- eventos -------------------------------------------------------
+
+    def _on_enter(self, _event) -> None:
+        if self._state == "disabled":
+            return
+        self.itemconfig(self._bg_item, fill=self._cfg["bg_hover"])
+        self.config(cursor="hand2")
+
+    def _on_leave(self, _event) -> None:
+        if self._state == "disabled":
+            return
+        self.itemconfig(self._bg_item, fill=self._cfg["bg_normal"])
+        self.config(cursor="")
+
+    def _on_click(self, _event) -> None:
+        if self._state == "disabled":
+            return
+        self.itemconfig(self._bg_item, fill=self._cfg["bg_pressed"])
+
+    def _on_release(self, _event) -> None:
+        if self._state == "disabled":
+            return
+        self.itemconfig(self._bg_item, fill=self._cfg["bg_hover"])
+        if self._command is not None:
+            self._command()
+
+    # ---- API tipo tk.Button --------------------------------------------
+
+    def configure(self, **kwargs):  # alias estándar de Tk
+        return self.config(**kwargs)
+
+    def config(self, **kwargs):  # type: ignore[override]
+        if "state" in kwargs:
+            new_state = str(kwargs.pop("state"))
+            self._state = new_state
+            if new_state == "disabled":
+                self.itemconfig(self._bg_item, fill=self._cfg["bg_disabled"])
+                self.itemconfig(self._text_item, fill=self._cfg["fg_disabled"])
+                self.config(cursor="")
+            else:
+                self.itemconfig(self._bg_item, fill=self._cfg["bg_normal"])
+                self.itemconfig(self._text_item, fill=self._cfg["fg_normal"])
+        if "text" in kwargs:
+            self._text = kwargs.pop("text")
+            self.itemconfig(self._text_item, text=self._text)
+        if "command" in kwargs:
+            self._command = kwargs.pop("command")
+        if kwargs:
+            return super().config(**kwargs)
+        return None
+
+    def cget(self, option):  # type: ignore[override]
+        if option == "text":
+            return self._text
+        if option == "state":
+            return self._state
+        if option == "command":
+            return self._command
+        return super().cget(option)
+
+    def __getitem__(self, key):
+        # tk.Misc define `__getitem__ = cget` como alias directo (no
+        # como wrapper que re-dispatcha), así que un override sólo de
+        # `cget()` NO sería visible vía `btn["state"]`. Redirigimos
+        # explícitamente para que ambas vías devuelvan el mismo valor.
+        return self.cget(key)
+
+    def __setitem__(self, key, value):
+        self.config(**{key: value})
+
+    def invoke(self) -> None:
+        """Simula click programático (espejo de `tk.Button.invoke`).
+        Usado por tests para disparar el `command` sin Event. No hace
+        nada si el botón está disabled."""
+        if self._state != "disabled" and self._command is not None:
+            self._command()
