@@ -42,8 +42,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.styles import Font
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SALIDA_DIR = PROJECT_ROOT / "salida"
+from paths import SALIDA_DIR  # noqa: E402  (paths centralizado dev/bundled)
 
 # Nombre estándar del archivo final. Patrón:
 #   ActivosCreados_{USUARIO}_{YYYYMMDD_HHMMSS}.xlsx

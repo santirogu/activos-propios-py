@@ -11,7 +11,7 @@ existe, `cargar_logo()` devuelve None y la GUI debe seguir funcionando
 mostrando sólo texto + colores (sin imagen).
 """
 
-from pathlib import Path
+from paths import bundled_resource_path
 
 # ---------------------------------------------------------------------------
 # Paleta de colores
@@ -46,8 +46,10 @@ ISA_VERDE_OK = "#1a7f37"
 # Logo
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-LOGO_PATH = PROJECT_ROOT / "resources" / "logo_hub_isa.png"
+# El logo va bundleado dentro del .exe (read-only); en dev se lee de
+# `<repo>/resources/`. Resuelto por `paths.bundled_resource_path` que
+# detecta `sys._MEIPASS` cuando corremos como ejecutable.
+LOGO_PATH = bundled_resource_path("resources/logo_hub_isa.png")
 # Altura por defecto del logo en la GUI (en px). El ancho se calcula
 # manteniendo el aspect ratio del archivo original.
 LOGO_ALTURA_PX = 85

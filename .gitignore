@@ -15,3 +15,9 @@ venv/
 # IDE
 .vscode/
 .idea/
+salida
+
+# Artefactos de PyInstaller (build del .exe)
+build/
+dist/
+*.spec.bak

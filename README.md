@@ -358,27 +358,146 @@ La suite contiene **226 pruebas** distribuidas en tres archivos:
 
 **Estrategia de mocking GUI**: `_SyncFakeThread` reemplaza `threading.Thread` para ejecutar el worker síncrono; `root.after` se sobreescribe en `setUp` para invocar callbacks inmediatamente. `patch.multiple("sap_upload", ...)` inyecta los mocks de las funciones del módulo; los mocks se guardan en `self.mocks` para verificación.
 
+## Build del ejecutable (.exe para entrega a usuarios NO técnicos)
+
+La app puede empaquetarse como un único archivo `GestionActivosFijos.exe` que el usuario final doble-clica — sin Python instalado, sin pip, sin terminal. El bundling usa **PyInstaller** y la configuración está en `GestionActivosFijos.spec` en la raíz del repo.
+
+### Cuándo usar el .exe vs. el código fuente
+
+- **Código (`python src/main.py`)** — para desarrolladores iterando.
+- **`GestionActivosFijos.exe`** — para el usuario final del proceso de activos fijos. Se distribuye una vez por release; no requiere conocimientos técnicos.
+
+### Pre-requisitos
+
+| | Detalle |
+|---|---|
+| Sistema operativo | **Windows obligatorio** para el build final — PyInstaller NO hace cross-compile. El `.exe` solo se genera corriéndolo EN Windows. |
+| Python | 3.9+ con tkinter (incluido en el installer oficial de python.org). |
+| Dependencias | `pip install -r requirements.txt` (instala openpyxl, tkcalendar, Pillow, pywin32). |
+| PyInstaller | `pip install pyinstaller`. |
+
+### Pasos del build (en Windows)
+
+```bash
+git pull
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+pip install pyinstaller
+pyinstaller GestionActivosFijos.spec --clean --noconfirm
+```
+
+Output:
+
+- `dist\GestionActivosFijos.exe` — el entregable (~80–120 MB típico con todas las dependencias bundleadas).
+- `build\` — artefactos intermedios; se pueden borrar.
+
+Ambas carpetas están en `.gitignore`.
+
+### Verificación post-build (smoke test)
+
+1. Doble-clic sobre `dist\GestionActivosFijos.exe` → la ventana de la app debe abrirse en ~2–4 s.
+2. Verificar que el logo aparece (bundleado dentro del `.exe`).
+3. La primera ejecución crea automáticamente:
+   - `resources\Formato_Dinamico_.xlsx` al lado del `.exe` (factory default extraído del bundle, editable por el usuario).
+   - `salida\` cuando se ejecuta el primer flujo (extracción TXT, Reporte SOX, etc.).
+4. Probar el botón **"Extraer información en txt"** (no requiere SAP) — verifica que la lectura de `resources\Formato_Dinamico_.xlsx` y la escritura en `salida\` funcionan.
+
+### Distribución al usuario final
+
+Compartir SOLO el archivo `GestionActivosFijos.exe`. NO hay que enviar `resources\`, `src\` ni nada más — todo está bundleado.
+
+El usuario:
+
+1. Guarda `GestionActivosFijos.exe` en una carpeta de su preferencia (ej. `C:\Users\<usuario>\Documents\GestionActivos\`).
+2. Doble-clic → abre la app.
+3. La carpeta del `.exe` queda con esta estructura tras la primera ejecución:
+   ```
+   GestionActivos\
+   ├── GestionActivosFijos.exe
+   ├── resources\
+   │   └── Formato_Dinamico_.xlsx     # editable por el usuario sin rebuild
+   └── salida\                         # outputs (LSMW_*.txt, Población_*.xlsx, etc.)
+   ```
+
+### Actualizaciones
+
+Cada release re-genera el `.exe`. El usuario solo reemplaza el archivo binario. Las carpetas `salida\` y `resources\` (con su `Formato_Dinamico_.xlsx` editado) se preservan automáticamente porque viven al lado del `.exe`, no dentro de él.
+
+### Falsos positivos de antivirus
+
+Algunos antivirus corporativos marcan ejecutables generados con PyInstaller como sospechosos (la firma del bootloader no es conocida). Mitigaciones:
+
+- **Whitelisting** del `.exe` en el AV corporativo (lo más simple para uso interno).
+- **Firma digital** con el certificado de la empresa (recomendado para distribución amplia; requiere coordinación con el equipo de seguridad).
+
+### Cómo funciona el bundling internamente
+
+- **`src/paths.py`** centraliza la resolución de rutas. Detecta `sys.frozen` (modo bundled vs dev) y `sys._MEIPASS` (carpeta temporal donde PyInstaller descomprime los recursos read-only).
+- En **dev mode** (`python src/main.py`), `PROJECT_ROOT` es el padre de `src/`.
+- En **bundled mode** (`.exe`), `PROJECT_ROOT` es la carpeta del `.exe` — por eso `salida\` y `resources\` siempre viven al lado del binario, no dentro de él.
+- El **logo** se lee bundled-only desde `sys._MEIPASS/resources/logo_hub_isa.png` (ver `branding.LOGO_PATH`).
+- El **Formato_Dinamico_.xlsx** se bundlea como *factory default* y `paths.asegurar_formato_dinamico()` lo extrae a `<EXE_DIR>\resources\` en el primer arranque. A partir de ahí la app siempre lee del externo (editable por el usuario sin rebuild).
+
+### Decisiones del `GestionActivosFijos.spec`
+
+Las claves del spec, documentadas para que sean intencionales:
+
+- **`console=False`** — la app es GUI; no abre un terminal negro al doble-clic.
+- **`--onefile`** (implícito por el spec con `EXE(... a.binaries, a.zipfiles, a.datas, ...)`) — un único archivo para distribución simple.
+- **`icon` solo en Windows** — el spec lo setea condicionalmente con `_sys.platform == "win32"`. En macOS/Linux se ignora para que el dry-run funcione.
+- **`datas`** — bundlean `logo_hub_isa.png` (read-only) y `Formato_Dinamico_.xlsx` (factory default editable).
+- **`hiddenimports`** — `win32com.client`, `pythoncom`, `PIL._tkinter_finder`, `babel.numbers`, `babel.dates`. Son módulos que el análisis estático no detecta porque se cargan dinámicamente.
+- **`excludes`** — `matplotlib`, `numpy`, `pandas`, `scipy`. Paquetes pesados que el proyecto no usa pero que a veces se cuelan por análisis transitivo (Pillow, openpyxl).
+
+### Dry-run en macOS/Linux para validar el spec
+
+Útil cuando estás iterando en el spec sin pasar a una máquina Windows todavía:
+
+```bash
+pip install pyinstaller
+pyinstaller GestionActivosFijos.spec --clean --noconfirm
+```
+
+Genera `dist/GestionActivosFijos` (binario nativo de tu OS, **NO un `.exe`**). Solo sirve para verificar:
+
+- Que el spec parsea sin errores.
+- Que los `datas` se encuentran y entran al binario.
+- Que los `hiddenimports` resuelven (excepto `win32com.client`/`pythoncom` que solo existen en Windows — esa warning es esperada en macOS).
+
+No sirve para entregar al usuario final.
+
 ## Estructura del proyecto
 
 ```
 .
 ├── src/
-│   ├── main.py                      # App GUI: 3 botones (extraer + subir SAP + Control SOX)
+│   ├── main.py                      # App GUI: 3 cards (Activos Fijos + Control SOX + Reportes)
+│   ├── paths.py                     # Helpers de rutas dev/bundled (sys.frozen, _MEIPASS, factory default)
+│   ├── branding.py                  # Paleta Hub de ISA + estilos de botón + carga del logo
 │   ├── sap_upload.py                # Carga LSMW vía SAP GUI Scripting
-│   └── sox_report.py                # Generación Reporte SOX vía SAP GUI Scripting
+│   ├── sox_report.py                # Generación Reporte SOX vía SAP GUI Scripting
+│   ├── extraer_activos_creados.py   # SM35P: filtro por usuario SAP + export del log
+│   └── subir_anexos.py              # AS02 + GOS PCATTA_CREA: adjunta archivos a cada activo
 ├── tests/
 │   ├── test_main.py                 # 75 pruebas: extracción + botones + vista SOX (frame embebido)
 │   ├── test_sap_upload.py           # 46 pruebas: flujo LSMW completo
-│   └── test_sox_report.py           # 105 pruebas: validaciones + flujo SOX + Población + Creados + IPE (capturas)
+│   ├── test_sox_report.py           # 105 pruebas: validaciones + flujo SOX + Población + Creados + IPE
+│   ├── test_extraer_activos_creados.py
+│   └── test_subir_anexos.py
 ├── resources/
-│   ├── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla
+│   ├── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla (factory default bundled)
+│   ├── logo_hub_isa.png             # Logo Hub de ISA (bundled, read-only en el .exe)
 │   ├── script_sap_base.txt          # Grabación VBS del flujo LSMW (UTF-16)
 │   ├── Script1.vbs                  # Grabación VBS: ruta dinámica en Specify Files
-│   └── Scriptsox.vbs                # Grabación VBS del flujo Reporte SOX
+│   ├── Script2sox.vbs               # Grabación VBS del flujo SOX (AR15 + calendario F4)
+│   ├── ScriptSM35P.vbs              # Grabación VBS del flujo SM35P (extraer activos creados)
+│   └── Scriptanexo.vbs              # Grabación VBS del flujo AS02 + GOS PCATTA_CREA
 ├── docs/
 │   └── flujo-proceso.png            # Diagrama del proceso completo
-├── salida/                          # Carpeta generada con los .txt exportados
-├── requirements.txt                 # openpyxl + pywin32 (Windows only)
+├── salida/                          # Carpeta generada con los outputs (LSMW_*.txt, Población_*.xlsx, ...)
+├── GestionActivosFijos.spec         # Config de PyInstaller para generar el .exe (ver sección "Build del ejecutable")
+├── requirements.txt                 # openpyxl + tkcalendar + Pillow + pywin32 (Windows only)
 └── README.md                        # Este archivo
 ```
 

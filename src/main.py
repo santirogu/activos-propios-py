@@ -12,10 +12,15 @@ from tkinter import filedialog
 from tkcalendar import DateEntry
 
 import branding
+from paths import (
+    PROJECT_ROOT,
+    SALIDA_DIR,
+    asegurar_formato_dinamico,
+    formato_dinamico_path,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-EXCEL_PATH = PROJECT_ROOT / "resources" / "Formato_Dinamico_.xlsx"
-OUTPUT_DIR = PROJECT_ROOT / "salida"
+EXCEL_PATH = formato_dinamico_path()
+OUTPUT_DIR = SALIDA_DIR
 SHEET_NAME = "LSMW "
 
 # Intervalo (ms) con que se re-evalúa el estado del botón "Subir a SAP" para
@@ -1273,6 +1278,24 @@ def _test_conexion_sap_handler() -> None:
 
 
 def main() -> None:
+    # En modo bundled (.exe), si es el primer arranque y el usuario aún
+    # no tiene `Formato_Dinamico_.xlsx` al lado del ejecutable, lo
+    # extraemos desde el bundle como factory default. Después de esto
+    # el archivo es externo y editable. En dev mode es no-op (el archivo
+    # ya está en resources/).
+    try:
+        _, recien_creado = asegurar_formato_dinamico()
+        if recien_creado:
+            _log(
+                "Primer arranque: se creó "
+                f"{EXCEL_PATH.name} en {EXCEL_PATH.parent}. "
+                "Puedes editarlo libremente."
+            )
+    except Exception as exc:
+        # No bloquea el arranque; el handler de "Extraer" reportará
+        # el error si el archivo sigue ausente cuando lo necesite.
+        _log(f"asegurar_formato_dinamico falló (no crítico): {exc}")
+
     root = tk.Tk()
     _install_tk_exception_handler(root)
     root.title("Gestión de Activos Fijos")

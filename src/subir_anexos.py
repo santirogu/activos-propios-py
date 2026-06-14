@@ -37,8 +37,7 @@ from openpyxl import load_workbook
 from sox_report import VALID_SOCIEDADES, validar_sociedad
 from extraer_activos_creados import ACTIVOS_FIJOS_SHEET_NAME
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SALIDA_DIR = PROJECT_ROOT / "salida"
+from paths import SALIDA_DIR  # noqa: E402  (paths centralizado dev/bundled)
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN

@@ -50,8 +50,7 @@ from pathlib import Path
 # CONFIGURACIÓN
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SALIDA_DIR = PROJECT_ROOT / "salida"
+from paths import SALIDA_DIR  # noqa: E402  (paths centralizado dev/bundled)
 
 # Identificadores tomados de las grabaciones VBS. Cambiar solo si el proyecto
 # LSMW tiene un step list distinto.
