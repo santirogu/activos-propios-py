@@ -143,7 +143,7 @@ Ventana principal (620x480, no redimensionable, título "Gestión de Activos Fij
 ### Vista Control SOX (frame embebido, no Toplevel)
 
 - **Patrón de switching de vistas:** `main()` envuelve todos los widgets del menú en un `frame_menu` (en vez de poner los widgets directo en `root`). Cuando el usuario presiona "Control SOX", `control_sox(root, frame_menu)` hace `frame_menu.pack_forget()` y muestra un nuevo `frame_sox` con el formulario + un botón "← Atrás". El click en Atrás destruye `frame_sox` y re-empaca `frame_menu`. El estado del menú (status_var, polling, flag `_upload_en_curso`) se preserva porque sólo se oculta, no se destruye.
-- **Sociedad**: `ttk.Combobox` en estado `readonly` (el usuario no puede escribir libre). Opciones: `TRAN, ISA, ITCH, CEYBA, CABA, RPAE, CTMP, REPD, ISAP`.
+- **Sociedad**: `ttk.Combobox` en estado `readonly` (el usuario no puede escribir libre). Opciones: `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP`.
 - **Desde/Hasta**: `DateEntry` de tkcalendar con `date_pattern="dd.mm.yyyy"`. Validación per-keystroke (`validar_caracter_fecha`) acepta solo dígitos y puntos, máx 10 caracteres. Inicializa con la fecha actual.
 - Validaciones al pulsar **Generar Reporte SOX**:
   1. Sociedad en lista permitida (normaliza con `.strip().upper()`).

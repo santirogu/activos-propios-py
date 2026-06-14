@@ -132,7 +132,7 @@ python src/extraer_activos_creados.py 1017209574
 
 Cuarto botón. Abre una sub-vista que permite adjuntar uno o varios archivos a CADA activo fijo de la hoja `Activos Fijos` del último `ActivosCreados_*.xlsx`. El form contiene:
 
-- **Sociedad** (Combobox readonly con `TRAN, ISA, ITCH, CEYBA, CABA, RPAE, CTMP, REPD, ISAP`).
+- **Sociedad** (Combobox readonly con `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP`).
 - **Seleccionar archivos** — abre el diálogo nativo de Windows para elegir 1+ archivos.
 - **Quitar seleccionado** — borra el archivo seleccionado de la lista.
 - **Listbox** mostrando los archivos a subir.
@@ -166,7 +166,7 @@ La estructura intermedia permite añadir en el futuro más opciones HUB.PPE.XX s
 
 Reemplaza la vista del intermedio por un formulario embebido en la misma ventana (no abre un Toplevel separado). Arriba a la izquierda aparece un botón **"← Atrás"** que devuelve al intermedio. El formulario sirve para generar el **Reporte SOX** desde SAP:
 
-- **Sociedad** — selector desplegable (`Combobox` en estado `readonly`) con las opciones: `TRAN, ISA, ITCH, CEYBA, CABA, RPAE, CTMP, REPD, ISAP`. El usuario no puede escribir valores arbitrarios.
+- **Sociedad** — selector desplegable (`Combobox` en estado `readonly`) con las opciones: `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP`. El usuario no puede escribir valores arbitrarios.
 - **Desde** / **Hasta** — campos con **calendario emergente** (`DateEntry` de `tkcalendar`). El usuario puede elegir la fecha del calendario o escribirla a mano. Aún en escritura manual, el `validatecommand` restringe a dígitos y puntos (máx 10 caracteres). Formato `dd.mm.aaaa`.
 
 Validaciones al presionar **"Generar Reporte SOX"**:

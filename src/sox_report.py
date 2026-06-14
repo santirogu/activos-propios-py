@@ -135,7 +135,7 @@ CREADOS_OBSERVACIONES = (
 
 # Sociedades válidas (mismas opciones que el combo del formulario).
 VALID_SOCIEDADES = (
-    "TRAN", "ISA", "ITCH", "CEYBA", "CABA", "RPAE", "CTMP", "REPD", "ISAP",
+    "TRAN", "ISA", "ITCH", "CEYA", "CABA", "RPAE", "CTMP", "REPD", "ISAP",
 )
 
 # Formato esperado en los campos de fecha del formulario (y de SAP).
