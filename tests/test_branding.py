@@ -83,20 +83,21 @@ class RoundedButtonStylesTest(unittest.TestCase):
             tertiary.itemcget(tertiary._bg_item, "fill"),
         )
 
-    def test_teal_and_purple_styles_use_palette_constants(self) -> None:
-        """Los estilos `teal` y `purple` se usan en las cards del menú
-        principal (Control SOX, Reportes). Si la paleta se ajusta vía
-        las constantes ISA_TEAL/ISA_MORADO, los botones se actualizan
-        automáticamente — este test fija ese contrato."""
-        teal = branding.RoundedButton(self.root, text="X", style="teal")
-        purple = branding.RoundedButton(self.root, text="X", style="purple")
+    def test_naranja_and_verde_styles_use_palette_constants(self) -> None:
+        """Los estilos `naranja` y `verde` se usan en las cards del
+        menú principal (Control SOX, Reportes). Ambos colores vienen
+        de la paleta corporativa del logo (ISA_NARANJA del swoosh,
+        ISA_VERDE_OK del estado de éxito) — este test fija el contrato
+        de que los styles reflejan las constantes corporativas."""
+        naranja = branding.RoundedButton(self.root, text="X", style="naranja")
+        verde = branding.RoundedButton(self.root, text="X", style="verde")
         self.assertEqual(
-            teal.itemcget(teal._bg_item, "fill").lower(),
-            branding.ISA_TEAL.lower(),
+            naranja.itemcget(naranja._bg_item, "fill").lower(),
+            branding.ISA_NARANJA.lower(),
         )
         self.assertEqual(
-            purple.itemcget(purple._bg_item, "fill").lower(),
-            branding.ISA_MORADO.lower(),
+            verde.itemcget(verde._bg_item, "fill").lower(),
+            branding.ISA_VERDE_OK.lower(),
         )
 
 

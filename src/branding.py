@@ -41,16 +41,10 @@ ISA_BLANCO = "#FFFFFF"
 ISA_FONDO = "#FFFFFF"
 
 # Verde de éxito (mensaje de status OK), conservado del esquema anterior
-# para no romper la lectura visual de "operación exitosa".
+# para no romper la lectura visual de "operación exitosa". Se reusa
+# también como color del botón "Reportes" en el menú principal.
 ISA_VERDE_OK = "#1a7f37"
-
-# Paleta extendida para las cards del menú principal. Cada card tiene un
-# botón con su propio color, replicando la maqueta de diseño (navy /
-# teal / púrpura). Hover = misma tonalidad un step más oscuro.
-ISA_TEAL = "#16A085"
-ISA_TEAL_HOVER = "#138670"
-ISA_MORADO = "#7B6BCC"
-ISA_MORADO_HOVER = "#6857B8"
+ISA_VERDE_HOVER = "#15662C"
 
 # Gris muy claro para bordes de cards (flat 1px en vez de drop-shadow,
 # que Tk no soporta nativo).
@@ -164,22 +158,25 @@ _BUTTON_STYLES = {
         padx=10,
         pady=4,
     ),
-    "teal": dict(
-        bg_normal=ISA_TEAL,
-        bg_hover=ISA_TEAL_HOVER,
-        bg_pressed=ISA_TEAL_HOVER,
-        bg_disabled="#B8DCC8",
+    "naranja": dict(
+        # Naranja del swoosh corporativo del logo ISA.
+        bg_normal=ISA_NARANJA,
+        bg_hover=ISA_NARANJA_HOVER,
+        bg_pressed=ISA_NARANJA_HOVER,
+        bg_disabled="#F8C99A",
         fg_normal=ISA_BLANCO,
         fg_disabled=ISA_BLANCO,
         font=("Helvetica", 11, "bold"),
         padx=14,
         pady=8,
     ),
-    "purple": dict(
-        bg_normal=ISA_MORADO,
-        bg_hover=ISA_MORADO_HOVER,
-        bg_pressed=ISA_MORADO_HOVER,
-        bg_disabled="#C8C0E5",
+    "verde": dict(
+        # Verde del estado "operación exitosa" reusado como acento de
+        # tercer nivel (Reportes) dentro de la paleta corporativa.
+        bg_normal=ISA_VERDE_OK,
+        bg_hover=ISA_VERDE_HOVER,
+        bg_pressed=ISA_VERDE_HOVER,
+        bg_disabled="#A8C9B0",
         fg_normal=ISA_BLANCO,
         fg_disabled=ISA_BLANCO,
         font=("Helvetica", 11, "bold"),

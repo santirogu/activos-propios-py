@@ -713,29 +713,31 @@ def _crear_card_visual(
 ) -> branding.RoundedButton:
     """Construye una "card" del menú principal (estilo maqueta de diseño).
 
-    Estructura vertical de cada card:
-        ┌─────────────────────────┐
-        │                         │
-        │   [ espacio icono ]     │  ← reservado para PNG futuro
-        │                         │
-        │       Título            │  ← 16pt bold navy
-        │                         │
-        │  Descripción centrada   │  ← 10pt gris, multi-línea
-        │  en gris suave.         │
-        │                         │
-        │  [   Botón color    ]   │  ← color según btn_style
-        └─────────────────────────┘
+    Estructura vertical de cada card (sin icono — decisión de UX):
+        ┌────────────────────────┐
+        │                        │
+        │       Título           │  ← 12pt bold navy
+        │                        │
+        │  Descripción centrada  │  ← 8pt gris, multi-línea
+        │  en gris suave.        │
+        │                        │
+        │  [  Botón color   ]    │  ← color según btn_style
+        │                        │
+        └────────────────────────┘
 
     El borde es plano 1 px en `ISA_GRIS_BORDE` (Tk no soporta
     drop-shadow nativo; el borde plano es la alternativa más limpia).
 
+    Dimensiones compactadas para encajar 3 cards en la ventana 620 px
+    de ancho del menú principal (sin agrandar la app).
+
     Args:
         parent: contenedor donde se empaca la card (típicamente un Frame
             horizontal con las 3 cards).
-        titulo: encabezado grande de la card (ej. "Activos fijos").
+        titulo: encabezado de la card (ej. "Activos fijos").
         descripcion: párrafo gris debajo del título. Multi-línea OK.
         btn_texto: texto del botón al pie (ej. "Acceder  →").
-        btn_style: estilo de RoundedButton ("primary"/"teal"/"purple").
+        btn_style: estilo de RoundedButton ("primary"/"naranja"/"verde").
         command: callback del botón. Ignorado si `disabled=True`.
         disabled: arranca con el botón en `state="disabled"`.
 
@@ -750,43 +752,36 @@ def _crear_card_visual(
         highlightbackground=branding.ISA_GRIS_BORDE,
         bd=0,
     )
-    card.pack(side="left", padx=15, ipadx=4, ipady=4)
-
-    # Espacio reservado para el icono futuro. Si en el futuro se añade
-    # un PNG, basta con poner un tk.Label(card, image=icon_ref) acá
-    # dentro. Por ahora el frame queda vacío con altura fija para que
-    # las cards conserven el shape de la maqueta.
-    icon_frame = tk.Frame(card, bg=branding.ISA_BLANCO, height=92)
-    icon_frame.pack(fill="x", padx=24, pady=(28, 12))
-    icon_frame.pack_propagate(False)
+    card.pack(side="left", padx=6)
 
     tk.Label(
         card,
         text=titulo,
-        font=("Helvetica", 16, "bold"),
+        font=("Helvetica", 12, "bold"),
         fg=branding.ISA_AZUL,
         bg=branding.ISA_BLANCO,
-    ).pack(pady=(0, 12), padx=24)
+    ).pack(pady=(16, 6), padx=12)
 
     tk.Label(
         card,
         text=descripcion,
-        font=("Helvetica", 10),
+        font=("Helvetica", 8),
         fg=branding.ISA_GRIS,
         bg=branding.ISA_BLANCO,
         justify="center",
-    ).pack(pady=(0, 28), padx=24)
+    ).pack(pady=(0, 14), padx=12)
 
     boton = branding.RoundedButton(
         card,
         text=btn_texto,
         style=btn_style,
-        padx=24, pady=12, width=260,
+        padx=12, pady=6, width=160,
+        font=("Helvetica", 10, "bold"),
         command=command,
     )
     if disabled:
         boton.config(state="disabled")
-    boton.pack(pady=(0, 28), padx=24)
+    boton.pack(pady=(0, 16), padx=12)
 
     return boton
 
@@ -1451,12 +1446,10 @@ def main() -> None:
     root = tk.Tk()
     _install_tk_exception_handler(root)
     root.title("Gestión de Activos Fijos")
-    # Geometría 1180x720 — acomoda las 3 cards "anchas" del menú principal
-    # (cada una ~340 px) con su layout vertical de icon + título + párrafo
-    # descriptivo + botón. Las sub-vistas (Activos Fijos, Control SOX,
-    # Subir Anexos, etc.) están centradas en su frame y se ven cómodas
-    # en esta ventana más amplia.
-    root.geometry("1180x720")
+    # Geometría 620x605 (igual que antes del refresh visual). Las 3
+    # cards del menú principal están dimensionadas para caber acá sin
+    # forzar agrandar la ventana — ancho ~190 px cada una.
+    root.geometry("620x605")
     root.resizable(False, False)
     root.configure(bg=branding.ISA_FONDO)
 
@@ -1502,8 +1495,12 @@ def main() -> None:
     #   - Botón al fondo con el color de la categoría
     #     (navy/teal/púrpura) llenando el ancho de la card.
     # `Reportes` queda con su botón en `state="disabled"` por ahora.
+    # No le ponemos `padx` aquí: las 3 cards juntas miden ~609 px de
+    # ancho (incluyendo su padx=6 interno) y deben caber centradas en
+    # la ventana de 620 px. Si añadimos padx en la row, las cards se
+    # salen por la derecha porque la geometría es fija.
     cards_row = tk.Frame(frame_menu, bg=branding.ISA_FONDO)
-    cards_row.pack(pady=(12, 0), padx=20)
+    cards_row.pack(pady=(12, 0))
 
     btn_card_activos = _crear_card_visual(
         cards_row,
@@ -1528,7 +1525,7 @@ def main() -> None:
             "y cumplimiento normativo."
         ),
         btn_texto="Continuar  →",
-        btn_style="teal",
+        btn_style="naranja",
         command=lambda: abrir_sox_menu(root, frame_menu),
     )
 
@@ -1542,7 +1539,7 @@ def main() -> None:
             "la toma de decisiones."
         ),
         btn_texto="Ver reportes  →",
-        btn_style="purple",
+        btn_style="verde",
         disabled=True,
     )
     btn_card_reportes.pack(side="left", padx=10)
