@@ -1,0 +1,114 @@
+LICENCIA DE USO Y TITULARIDAD
+================================
+
+Software:        Gestión de Activos Fijos (proyecto "activos-propios-py")
+Titular:         El Hub de ISA (en adelante, "la Compañía")
+Autora:          Jenny Catalina Culma Veloza (en adelante, "la Autora")
+Año de creación: 2026
+
+Copyright © 2026 El Hub de ISA. Todos los derechos reservados.
+
+
+1. TITULARIDAD DE LA OBRA
+
+   Este software, incluido todo su código fuente, documentación, recursos
+   gráficos, scripts de automatización (incluyendo grabaciones VBS y
+   adaptaciones a Python), archivos de configuración, especificaciones
+   funcionales, manuales de uso y cualquier otro entregable derivado del
+   proyecto (en adelante, "la Obra"), es de titularidad exclusiva de la
+   Compañía.
+
+   La Obra fue desarrollada por la Autora en el marco de su relación
+   laboral con la Compañía. La participación de la Autora como
+   desarrolladora del código NO le otorga derechos de propiedad,
+   explotación, reproducción, modificación, distribución o uso personal
+   sobre la Obra.
+
+   La Compañía conserva la totalidad de los derechos patrimoniales sobre
+   la Obra, reconocidos por la legislación aplicable.
+
+
+2. EXCLUSIÓN DE USO PERSONAL
+
+   El código y demás artefactos de la Obra no pueden considerarse, en
+   ningún momento, propiedad personal de la Autora.
+
+   Cualquier mejora, modificación, derivado, refactorización o extensión
+   realizada sobre la Obra durante la relación laboral con la Compañía
+   pertenece a la Compañía desde el momento de su creación, sin necesidad
+   de cesión expresa adicional.
+
+
+3. TERMINACIÓN DE LA RELACIÓN LABORAL
+
+   En caso de finalización del vínculo laboral entre la Autora y la
+   Compañía, por cualquier causa (renuncia, despido, mutuo acuerdo,
+   terminación de contrato, jubilación u otra):
+
+   a. La Autora entregará a la Compañía la totalidad del proyecto,
+      incluyendo (sin limitarse a):
+
+         - Código fuente completo y todas sus ramas.
+         - Repositorios locales y remotos, junto con sus credenciales.
+         - Documentación técnica y funcional.
+         - Archivos de configuración y secretos relacionados.
+         - Grabaciones VBS y cualquier otra automatización SAP asociada.
+         - Manuales de usuario, diagramas y material de capacitación.
+         - Ejecutables, builds firmados y artefactos de distribución.
+         - Cualquier otro entregable producido en el marco del proyecto.
+
+   b. La Autora NO conservará copias, forks, ramas privadas, snapshots,
+      backups personales, ni ninguna otra reproducción de la Obra para
+      uso personal o para terceros.
+
+   c. La Autora NO podrá apropiarse de ninguna parte de la Obra ni
+      utilizarla, total o parcialmente, en proyectos personales,
+      académicos, comerciales o para terceros distintos de la Compañía.
+
+   d. La Autora reconoce y acepta que la Compañía dispondrá libremente
+      de la Obra para los fines que estime convenientes, incluyendo
+      (sin limitarse a) su uso interno continuado, modificación,
+      continuación del desarrollo por otros equipos, cesión a terceros,
+      comercialización o discontinuación.
+
+
+4. ALCANCE TEMPORAL
+
+   Lo dispuesto en esta licencia aplica a todas las versiones de la Obra,
+   presentes y futuras, mientras la relación laboral esté vigente, y se
+   mantiene como obligación de la Autora una vez finalizada dicha
+   relación, con respecto a todo el material producido durante la
+   vigencia de la misma.
+
+
+5. CONFIDENCIALIDAD
+
+   La Autora reconoce que la Obra puede contener información confidencial
+   de la Compañía y/o de sus clientes (procesos internos, datos de
+   transacciones SAP, criterios de control SOX, configuraciones de
+   sociedades, entre otros). La Autora se obliga a guardar reserva sobre
+   dicha información, tanto durante como después de la relación laboral.
+
+
+6. DISTRIBUCIÓN Y USO POR TERCEROS
+
+   Esta Obra NO es software libre ni de código abierto. Cualquier uso,
+   distribución, copia, modificación o ingeniería inversa por parte de
+   terceros REQUIERE autorización escrita y expresa de la Compañía.
+
+
+7. JURISDICCIÓN Y LEY APLICABLE
+
+   Cualquier controversia derivada de la interpretación o aplicación de
+   esta licencia se regirá por la legislación vigente en la jurisdicción
+   donde la Compañía tiene su sede principal, y se someterá a sus
+   tribunales competentes.
+
+
+---
+
+Por su uso, modificación o distribución, se entiende que el usuario
+acepta los términos de esta licencia.
+
+Copyright © 2026 El Hub de ISA. Todos los derechos reservados.
+Autora del desarrollo: Jenny Catalina Culma Veloza.

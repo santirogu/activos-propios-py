@@ -92,24 +92,70 @@ a = Analysis(
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name="GestionActivosFijos",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,           # comprime el binario si UPX está en PATH; si no, warning silencioso
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,      # GUI app — no abre consola al doble-clic
-    disable_windowed_traceback=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=_icon,
-)
+# Splash screen: imagen que el bootloader muestra INMEDIATAMENTE al doble-
+# clic, antes de descomprimir el bundle de --onefile. Para el usuario eso
+# es la diferencia entre "no pasa nada" (5–8 s en frío) y "ya está
+# cargando". El runtime cierra el splash desde `main._cerrar_splash()`
+# cuando la ventana Tk ya está lista.
+#
+# IMPORTANTE: PyInstaller solo soporta Splash en Windows y Linux. En macOS
+# el build falla si se incluye, así que el dry-run salta el splash y arma
+# el EXE sin él. En el build real en Windows el splash sí entra.
+_soporta_splash = _sys.platform in ("win32", "linux")
+
+if _soporta_splash:
+    splash = Splash(
+        "resources/logo_hub_isa.png",
+        binaries=a.binaries,
+        datas=a.datas,
+        text_pos=(10, 260),       # x,y dentro de la imagen (469x286)
+        text_size=10,
+        text_color="#1A3A6C",     # ISA_AZUL — coincide con branding.py
+        text_default="Cargando Gestión de Activos Fijos…",
+        always_on_top=True,
+    )
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        splash,
+        splash.binaries,
+        [],
+        name="GestionActivosFijos",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=_icon,
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        [],
+        name="GestionActivosFijos",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=_icon,
+    )

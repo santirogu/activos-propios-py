@@ -944,6 +944,38 @@ class ControlSoxDialogTest(unittest.TestCase):
         finally:
             frame_sox.destroy()
 
+    def test_date_entries_do_not_use_key_validation(self) -> None:
+        """REGRESIÓN: `validate="key"` + un `validatecommand` custom en
+        DateEntry rompía el flujo `_select` del popup del calendario:
+        al hacer click en un día, la cascada de validación re-entrante
+        dejaba el popup en estado roto y los siguientes clicks no
+        surtían efecto hasta reiniciar la app.
+
+        El fix es dejar que tkcalendar use su default (`focusout` con
+        su `_validate_date` interno). Cualquiera que en el futuro
+        intente reactivar `validate="key"` aquí debe leer este test
+        y entender que está reintroduciendo un bug conocido.
+        """
+        frame_sox = main.control_sox(self.root, self.frame_menu)
+        try:
+            for nombre, entry in (
+                ("desde_entry", frame_sox.desde_entry),
+                ("hasta_entry", frame_sox.hasta_entry),
+            ):
+                self.assertNotEqual(
+                    str(entry.cget("validate")), "key",
+                    f"{nombre}: validate='key' rompe el popup del calendario",
+                )
+
+            # `set_date` (lo que invoca el popup al hacer click en un día)
+            # debe propagar correctamente a la StringVar — verificamos
+            # que ese flujo NO está roto por validation cascade.
+            from datetime import date
+            frame_sox.desde_entry.set_date(date(2026, 7, 15))
+            self.assertEqual(frame_sox.desde_var.get(), "15.07.2026")
+        finally:
+            frame_sox.destroy()
+
 
 class AbrirActivosFijosTest(unittest.TestCase):
     """`abrir_activos_fijos(root, frame_menu)` reemplaza la vista del menú
@@ -1439,6 +1471,88 @@ class ExtraerActivosCreadosHandlerTest(unittest.TestCase):
             )
 
         mock_cm.assert_called_once()
+
+
+class FooterCopyrightTest(unittest.TestCase):
+    """`_crear_footer_copyright(parent)` empaca un label con copyright +
+    año dinámico en el strip inferior del padre. Se llama UNA vez sobre
+    `root` desde `main()` para que persista en TODAS las sub-vistas
+    (frames se montan por encima con `fill='both', expand=True`)."""
+
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_label_text_includes_current_year_and_company(self) -> None:
+        """El footer debe mencionar `© {año actual} El Hub de ISA`. El
+        año se calcula dinámicamente con `datetime.now().year`, así que
+        en 2027 el copyright lo refleja sin cambios de código."""
+        from datetime import datetime
+
+        footer = main._crear_footer_copyright(self.root)
+        try:
+            texto = footer.cget("text")
+            año_actual = datetime.now().year
+            self.assertIn(f"© {año_actual}", texto)
+            self.assertIn("El Hub de ISA", texto)
+        finally:
+            footer.destroy()
+
+    def test_label_uses_discreet_styling(self) -> None:
+        """Font pequeño + gris claro para no competir visualmente con el
+        contenido principal de cada vista."""
+        import branding
+
+        footer = main._crear_footer_copyright(self.root)
+        try:
+            font_spec = footer.cget("font")
+            # Acepta formatos string "Helvetica 8" o tuple ("Helvetica", 8).
+            self.assertIn("Helvetica", str(font_spec))
+            self.assertIn("8", str(font_spec))
+            self.assertEqual(
+                str(footer.cget("fg")).lower(),
+                branding.ISA_GRIS_CLARO.lower(),
+            )
+        finally:
+            footer.destroy()
+
+    def test_label_packed_at_bottom_of_parent(self) -> None:
+        """El footer debe usar `side='bottom'` para claimear el strip
+        inferior. Sin esto, los frames de sub-vistas (que se empacan con
+        `fill='both', expand=True`) lo taparían."""
+        footer = main._crear_footer_copyright(self.root)
+        try:
+            self.assertEqual(footer.pack_info().get("side"), "bottom")
+        finally:
+            footer.destroy()
+
+
+class CerrarSplashTest(unittest.TestCase):
+    """`_cerrar_splash()` cierra el splash de PyInstaller cuando la app
+    corre como `.exe` bundled. En dev mode el módulo `pyi_splash` no
+    existe (PyInstaller lo inyecta sólo en runtime bundled), así que
+    el helper debe ser no-op silencioso para no romper `python src/main.py`.
+    """
+
+    def test_no_op_when_pyi_splash_module_absent(self) -> None:
+        """Sin pyi_splash (dev mode) debe terminar sin levantar excepción.
+        Si esto se rompiera, lanzar la app desde `python src/main.py`
+        haría crashear el arranque."""
+        # En dev mode `pyi_splash` no debería poder importarse — verificamos
+        # eso primero como precondición del test.
+        with self.assertRaises(ImportError):
+            import pyi_splash  # noqa: F401
+
+        # La llamada NO debe levantar excepción.
+        try:
+            main._cerrar_splash()
+        except Exception as exc:  # pragma: no cover  (defensa)
+            self.fail(
+                f"_cerrar_splash() lanzó {type(exc).__name__} en dev mode: {exc}"
+            )
 
 
 if __name__ == "__main__":

@@ -36,9 +36,12 @@ La autenticación SAP es manual; el script no logea al usuario, solo se conecta 
 │   ├── subir_anexos.py  # Flujo AS02 + GOS PCATTA_CREA: adjunta archivos a cada activo
 │   └── branding.py      # Paleta corporativa Hub de ISA + helpers para Tk
 ├── tests/
-│   ├── test_main.py         # 63 pruebas: extracción + handlers de botones + diálogo SOX
-│   ├── test_sap_upload.py   # 36 pruebas: cada paso del flujo LSMW aislado
-│   └── test_sox_report.py   # 42 pruebas: validaciones + flujo SOX
+│   ├── test_main.py                       # 99 pruebas: extracción + botones + vistas + footer + splash + regresión calendario
+│   ├── test_paths.py                      # 7 pruebas: helpers dev/bundled + factory default Formato_Dinamico_
+│   ├── test_sap_upload.py                 # 46 pruebas: cada paso del flujo LSMW aislado
+│   ├── test_sox_report.py                 # 105 pruebas: validaciones + flujo SOX + Población + Creados + IPE
+│   ├── test_extraer_activos_creados.py    # 48 pruebas
+│   └── test_subir_anexos.py               # 29 pruebas
 ├── resources/
 │   ├── Formato_Dinamico_.xlsx        # Excel maestro con hojas "Formato" y "LSMW "
 │   ├── Población_ISA_31.03.2026.xlsx # Insumo del cliente
@@ -339,7 +342,7 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 - Celdas vacías referenciadas pueden aparecer como `0`.
 - 51 columnas exportadas — algunos campos: `ANLKL` (clase de activo), `BUKRS` (sociedad), `TXT50` (denominación), `KOSTL` (centro de costo), `WERKS` (centro), `EAUFN` (orden de inversión), `POSNR` (elemento PEP), `ORD41`–`ORD44` y `GDLGRP` (criterios de clasificación 1–5).
 
-## 8. Pruebas — 151 tests con `unittest`
+## 8. Pruebas — 334 tests con `unittest`
 
 ### Estrategia de mocking SAP
 - `MockSAPSession` registra cada llamada `findById(...).method()` en `session.actions` como tuplas `(sap_id, method, *args)`.
@@ -353,9 +356,12 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 - `patch.multiple("sap_upload", ...)` inyecta mocks; se guardan en `self.mocks`.
 
 ### Distribución
-- `tests/test_main.py` (75): handlers GUI, extracción TSV, vista SOX como frame embebido (`ControlSoxDialogTest` verifica el ocultado del menú, exposición del botón Atrás, y reversión al menú; `GenerarReporteSoxHandlerTest` verifica que ambos botones Generar+Atrás se deshabilitan durante el worker).
+- `tests/test_main.py` (99): handlers GUI, extracción TSV, vista SOX como frame embebido (`ControlSoxDialogTest` incluye `test_date_entries_do_not_use_key_validation` — regresión del bug del calendario donde `validate="key"` rompía el `_select` del popup), `FooterCopyrightTest` (3 tests: año actual, estilo discreto, packed `side="bottom"`), `CerrarSplashTest` (no-op silencioso de `_cerrar_splash` en dev mode), `GenerarReporteSoxHandlerTest` (deshabilitado de Generar+Atrás durante worker).
+- `tests/test_paths.py` (7): helpers de modo dev/bundled (PyInstaller). `ProjectRootTest` (`sys.frozen` vs dev), `BundledResourcePathTest` (lectura de `sys._MEIPASS`), `AsegurarFormatoDinamicoTest` (factory default del Formato_Dinamico_: primer arranque copia, segundo preserva ediciones, bundle ausente devuelve path sin crashear).
 - `tests/test_sox_report.py` (105): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso Población) + `PatronAfRegexTest` (6 tests del parseo de col D) + `GenerarHojaCreadosTest` (16 tests del paso post-procesamiento: filter, parsing, estructura, K y L como fórmulas =MID/=IF, replace idempotente, errores) + `EjecutarReporteTest` (2 tests del split de F8) + `GenerarHojaIpeTest` (8 tests de la hoja de evidencias: crear, embedding, soft-fail, replace, scaling) + `GenerarReporteSoxTest` (verifica orden de las 7 etapas incluyendo screenshots, paso a las funciones, `EXPORT_METHOD=None` salta Población/Creados/IPE).
 - `tests/test_sap_upload.py` (46): cada paso del flujo LSMW + `MainEntryPointTest`.
+- `tests/test_extraer_activos_creados.py` (48): cada paso del flujo SM35P + post-procesamiento del .xlsx.
+- `tests/test_subir_anexos.py` (29): cada paso del flujo AS02+GOS PCATTA_CREA + orquestador soft-fail.
 
 ### Cómo ejecutar
 ```bash

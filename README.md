@@ -259,9 +259,9 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **226 pruebas** distribuidas en tres archivos:
+La suite contiene **334 pruebas** distribuidas en seis archivos:
 
-#### `tests/test_main.py` (75 pruebas)
+#### `tests/test_main.py` (99 pruebas)
 
 **`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
 
@@ -358,6 +358,18 @@ La suite contiene **226 pruebas** distribuidas en tres archivos:
 
 **Estrategia de mocking GUI**: `_SyncFakeThread` reemplaza `threading.Thread` para ejecutar el worker síncrono; `root.after` se sobreescribe en `setUp` para invocar callbacks inmediatamente. `patch.multiple("sap_upload", ...)` inyecta los mocks de las funciones del módulo; los mocks se guardan en `self.mocks` para verificación.
 
+#### `tests/test_paths.py` (7 pruebas)
+
+Valida los helpers de `src/paths.py` que distinguen entre modo dev (`python src/main.py`) y modo bundled (PyInstaller `.exe`).
+
+**`ProjectRootTest`** (2 pruebas) — `project_root()` devuelve el padre de `src/` en dev y la carpeta del `.exe` en frozen (vía `sys.executable`). Si este test falla, en bundled mode `salida/` y `resources/` quedarían dentro del temp `_MEIPASS` y se borrarían al cerrar la app.
+
+**`BundledResourcePathTest`** (2 pruebas) — `bundled_resource_path()` lee de `sys._MEIPASS` cuando está presente (bundled), del repo cuando no (dev). Es lo que usa `branding.LOGO_PATH`.
+
+**`AsegurarFormatoDinamicoTest`** (3 pruebas) — el "factory default": primer arranque copia el `Formato_Dinamico_` bundleado a `<EXE_DIR>/resources/`; arranques posteriores NO sobrescriben las ediciones del usuario; si el bundle tampoco existe, devuelve el path sin crashear para que el caller reporte error claro.
+
+**`tests/test_main.py`** — además de las clases anteriores, incluye `FooterCopyrightTest` (3 pruebas: texto contiene `© {año} El Hub de ISA`, font/color discretos, packed `side="bottom"`), `CerrarSplashTest` (1 prueba: no-op silencioso en dev mode cuando `pyi_splash` no está disponible), y `test_date_entries_do_not_use_key_validation` dentro de `ControlSoxDialogTest` (regresión del bug del calendario donde `validate="key"` rompía el `_select` del popup).
+
 ## Build del ejecutable (.exe para entrega a usuarios NO técnicos)
 
 La app puede empaquetarse como un único archivo `GestionActivosFijos.exe` que el usuario final doble-clica — sin Python instalado, sin pip, sin terminal. El bundling usa **PyInstaller** y la configuración está en `GestionActivosFijos.spec` en la raíz del repo.
@@ -449,6 +461,7 @@ Las claves del spec, documentadas para que sean intencionales:
 - **`datas`** — bundlean `logo_hub_isa.png` (read-only) y `Formato_Dinamico_.xlsx` (factory default editable).
 - **`hiddenimports`** — `win32com.client`, `pythoncom`, `PIL._tkinter_finder`, `babel.numbers`, `babel.dates`. Son módulos que el análisis estático no detecta porque se cargan dinámicamente.
 - **`excludes`** — `matplotlib`, `numpy`, `pandas`, `scipy`. Paquetes pesados que el proyecto no usa pero que a veces se cuelan por análisis transitivo (Pillow, openpyxl).
+- **`Splash`** — pantalla de carga que el bootloader muestra INMEDIATAMENTE al doble-clic, antes de descomprimir el bundle de `--onefile`. Para el usuario eso convierte 5–8 s de "no pasa nada" en 5–8 s de "está cargando". El runtime cierra el splash desde `main._cerrar_splash()` cuando la ventana Tk ya está visible. Sólo se incluye en Windows/Linux (en macOS PyInstaller no lo soporta y el spec lo salta automáticamente).
 
 ### Dry-run en macOS/Linux para validar el spec
 
@@ -480,11 +493,12 @@ No sirve para entregar al usuario final.
 │   ├── extraer_activos_creados.py   # SM35P: filtro por usuario SAP + export del log
 │   └── subir_anexos.py              # AS02 + GOS PCATTA_CREA: adjunta archivos a cada activo
 ├── tests/
-│   ├── test_main.py                 # 75 pruebas: extracción + botones + vista SOX (frame embebido)
+│   ├── test_main.py                 # 99 pruebas: extracción + botones + vistas + footer + splash + regresión calendario
+│   ├── test_paths.py                # 7 pruebas: helpers dev/bundled + factory default
 │   ├── test_sap_upload.py           # 46 pruebas: flujo LSMW completo
 │   ├── test_sox_report.py           # 105 pruebas: validaciones + flujo SOX + Población + Creados + IPE
-│   ├── test_extraer_activos_creados.py
-│   └── test_subir_anexos.py
+│   ├── test_extraer_activos_creados.py  # 48 pruebas
+│   └── test_subir_anexos.py         # 29 pruebas
 ├── resources/
 │   ├── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla (factory default bundled)
 │   ├── logo_hub_isa.png             # Logo Hub de ISA (bundled, read-only en el .exe)
@@ -580,3 +594,11 @@ La hoja `LSMW` mapea las columnas del formulario a los **nombres técnicos de ca
 | Falla en `select_step_row` | Proyecto LSMW incorrecto pre-cargado | Abrir LSMW manualmente con el proyecto correcto |
 | Falla en `configurar_ruta_archivo` | El proyecto LSMW tiene la definición de archivo en otra posición | Re-grabar `Script1.vbs` con tu proyecto y ajustar IDs (`lbl[43,6]`, `btn[25]`, `btn[27]`) |
 | Falla en `step_read_data` | El archivo no existe en la ruta inyectada o no tiene permisos | Verifica que `salida/<archivo>` exista y SAP tenga acceso al disco |
+
+## Licencia y titularidad
+
+Este software es de titularidad exclusiva de **El Hub de ISA**. Fue desarrollado por **Jenny Catalina Culma Veloza** en el marco de su relación laboral con la compañía. El código no constituye propiedad personal de la autora y, en caso de finalización del vínculo laboral, la totalidad del proyecto (código, repositorios, documentación, grabaciones VBS, builds y demás artefactos) se entrega a la compañía sin reservas ni copias retenidas.
+
+Los términos completos están en [LICENSE](LICENSE) en la raíz del repositorio. Esta NO es una licencia de código abierto: cualquier uso, modificación o distribución por terceros requiere autorización escrita y expresa de El Hub de ISA.
+
+Copyright © 2026 El Hub de ISA. Todos los derechos reservados.

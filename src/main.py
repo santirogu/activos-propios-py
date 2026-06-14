@@ -98,6 +98,32 @@ def _sap_com_apartment():
             _log(f"_sap_com_apartment: CoUninitialize falló (ignorado) — {exc!r}")
 
 
+def _cerrar_splash() -> None:
+    """Cierra el splash de PyInstaller si la app corre bundleada.
+
+    `pyi_splash` es un módulo que PyInstaller INYECTA en el runtime sólo
+    cuando el spec incluye un `Splash(...)` (ver GestionActivosFijos.spec).
+    En dev mode (`python src/main.py`) el import falla y simplemente no
+    hay splash que cerrar — es no-op. En macOS Splash no se soporta, así
+    que tampoco existe.
+
+    Se llama justo antes de `root.mainloop()` para que el splash
+    desaparezca al mismo tiempo que la ventana principal se hace visible
+    (UX limpio: el usuario ve la pantalla de carga → desaparece →
+    aparece la app).
+    """
+    try:
+        import pyi_splash  # noqa: I001  (módulo inyectado por PyInstaller)
+    except ImportError:
+        return
+    try:
+        if pyi_splash.is_alive():
+            pyi_splash.close()
+    except Exception:
+        # Nunca queremos que un fallo del splash impida el arranque.
+        pass
+
+
 def _install_tk_exception_handler(root: tk.Tk) -> None:
     """Reemplaza el handler default de Tkinter (que solo imprime a stderr)
     por uno que muestra un diálogo. Captura cualquier excepción no manejada
@@ -650,6 +676,31 @@ def _subir_anexos_handler(
     threading.Thread(target=worker, daemon=True).start()
 
 
+def _crear_footer_copyright(parent: tk.Misc) -> tk.Label:
+    """Footer pequeño con copyright + año actual, centrado abajo.
+
+    Se llama UNA vez sobre `root` desde `main()` y persiste a través del
+    switching de sub-vistas: como se empaca con `side="bottom"` ANTES
+    de cualquier sub-frame, claimea el strip inferior del root y los
+    frames que se montan después (vía `pack(fill="both", expand=True)`)
+    ocupan el espacio restante por encima.
+
+    Tamaño y color discretos (Helvetica 8pt + ISA_GRIS_CLARO) para que
+    no compita visualmente con el contenido principal. Ver LICENSE en
+    la raíz del repo para los términos completos.
+    """
+    año = datetime.now().year
+    footer = tk.Label(
+        parent,
+        text=f"© {año} El Hub de ISA · Todos los derechos reservados",
+        font=("Helvetica", 8),
+        fg=branding.ISA_GRIS_CLARO,
+        bg=branding.ISA_FONDO,
+    )
+    footer.pack(side="bottom", pady=(0, 6))
+    return footer
+
+
 def _crear_header_form(
     root: tk.Tk,
     frame: tk.Frame,
@@ -1081,7 +1132,7 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     Devuelve el `Frame` creado para que los tests puedan inspeccionar los
     widgets (las StringVars, los DateEntry, los botones).
     """
-    from sox_report import VALID_SOCIEDADES, validar_caracter_fecha
+    from sox_report import VALID_SOCIEDADES
 
     # Ocultar el menú — preservamos su estado (status_var, polling del
     # botón Subir, etc.) para no perder progreso si el usuario vuelve.
@@ -1147,10 +1198,20 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     sociedad_combo.grid(row=0, column=1, padx=4, pady=6, sticky="w")
 
     # --- Fechas con calendario emergente (DateEntry de tkcalendar) ---
-    # DateEntry abre un popup de calendario al hacer clic en la flecha. El
-    # validatecommand sigue activo: aunque el usuario escriba a mano, solo
-    # se aceptan dígitos y puntos (máx 10 caracteres).
-    vcmd = (root.register(validar_caracter_fecha), "%P")
+    # DateEntry abre un popup de calendario al hacer clic en la flecha.
+    #
+    # IMPORTANTE: NO se usan `validate="key"` + `validatecommand` aquí.
+    # La cascada de Tk dispara la `validatecommand` cuando tkcalendar
+    # actualiza el textvariable via `set_date()` desde el popup. Esa
+    # re-entrancia rompía el flujo `_select` del calendario: a veces el
+    # popup quedaba con `_date = None` y los clicks dejaban de surtir
+    # efecto hasta reiniciar la app.
+    #
+    # tkcalendar ya valida el formato `dd.mm.yyyy` al perder foco; lo que
+    # el usuario tipea queda saneado en focusout. El submit final pasa
+    # además por `validar_fecha` + `validar_rango_fechas` antes de llegar
+    # a SAP, así que no perdemos garantías reales — sólo el filtrado
+    # cosmético per-keystroke de letras.
     fecha_hoy = datetime.now()
 
     tk.Label(
@@ -1166,8 +1227,6 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
         background="#1a73e8",
         foreground="white",
         borderwidth=2,
-        validate="key",
-        validatecommand=vcmd,
         year=fecha_hoy.year,
         month=fecha_hoy.month,
         day=fecha_hoy.day,
@@ -1191,8 +1250,6 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
         background="#1a73e8",
         foreground="white",
         borderwidth=2,
-        validate="key",
-        validatecommand=vcmd,
         year=fecha_hoy.year,
         month=fecha_hoy.month,
         day=fecha_hoy.day,
@@ -1300,13 +1357,20 @@ def main() -> None:
     _install_tk_exception_handler(root)
     root.title("Gestión de Activos Fijos")
     # Ventana algo más ancha para acomodar 3 cards horizontales.
-    # Altura 580 (era 480) para acomodar la vista "Subir Anexos" que
-    # tiene combobox + 2 filas de botones + listbox + botón + status —
-    # con 480 el label de status quedaba clippeado al borde inferior.
-    # Las otras vistas se ven OK con el aire extra.
-    root.geometry("620x580")
+    # Altura 605 (era 580): el footer de copyright consume ~20 px en
+    # el strip inferior; sin el bump la vista "Subir Anexos" (que ya
+    # llenaba el alto 580) clippeaba el status label. Las otras vistas
+    # se ven igual con el aire extra.
+    root.geometry("620x605")
     root.resizable(False, False)
     root.configure(bg=branding.ISA_FONDO)
+
+    # Footer de copyright: se empaca PRIMERO sobre root con side="bottom"
+    # para que claimee el strip inferior. Los frames de las sub-vistas
+    # se montan después con fill="both"+expand=True y ocupan el espacio
+    # por encima del footer, por lo que el copyright persiste visible
+    # en todas las pantallas sin tener que llamarlo en cada `abrir_*`.
+    _crear_footer_copyright(root)
 
     # Todos los widgets del menú principal viven dentro de `frame_menu`
     # para que las sub-vistas (Activos Fijos, Control SOX) puedan
@@ -1389,6 +1453,12 @@ def main() -> None:
     # btn_test.pack()  # intencionalmente oculto
 
     frame_menu.pack(fill="both", expand=True)
+
+    # El splash de PyInstaller (si la app corre como .exe bundled) se
+    # cierra justo antes de mainloop para que la transición sea limpia:
+    # imagen de carga → ventana principal. En dev mode es no-op.
+    root.update_idletasks()
+    _cerrar_splash()
 
     root.mainloop()
 
