@@ -710,40 +710,45 @@ def _crear_card_visual(
     btn_style: str,
     command=None,
     disabled: bool = False,
-) -> branding.RoundedButton:
+    width: int | None = None,
+    height: int | None = None,
+) -> tuple[tk.Frame, branding.RoundedButton]:
     """Construye una "card" del menú principal (estilo maqueta de diseño).
 
-    Estructura vertical de cada card (sin icono — decisión de UX):
+    Estructura vertical (sin icono — decisión de UX):
         ┌────────────────────────┐
-        │                        │
         │       Título           │  ← 12pt bold navy
-        │                        │
         │  Descripción centrada  │  ← 8pt gris, multi-línea
         │  en gris suave.        │
-        │                        │
         │  [  Botón color   ]    │  ← color según btn_style
-        │                        │
         └────────────────────────┘
 
-    El borde es plano 1 px en `ISA_GRIS_BORDE` (Tk no soporta
-    drop-shadow nativo; el borde plano es la alternativa más limpia).
+    Borde plano 1 px en `ISA_GRIS_BORDE` (Tk no soporta drop-shadow).
 
-    Dimensiones compactadas para encajar 3 cards en la ventana 620 px
-    de ancho del menú principal (sin agrandar la app).
+    Si se pasan `width` y `height`, la card se fuerza a esas dimensiones
+    exactas con `pack_propagate(False)` — útil para que las 3 cards del
+    menú queden simétricas pese a tener descripciones de distinta
+    longitud. Si se omiten, la card auto-dimensiona a su contenido.
+
+    NO se hace `.pack()` aquí — el caller controla el layout (top row
+    side='left' vs bottom row centered). Esto da la flexibilidad para
+    el layout 2+1 (2 cards arriba, Reportes centrada abajo).
 
     Args:
-        parent: contenedor donde se empaca la card (típicamente un Frame
-            horizontal con las 3 cards).
-        titulo: encabezado de la card (ej. "Activos fijos").
+        parent: contenedor donde vivirá la card.
+        titulo: encabezado de la card (ej. "Activos Fijos").
         descripcion: párrafo gris debajo del título. Multi-línea OK.
         btn_texto: texto del botón al pie (ej. "Acceder  →").
         btn_style: estilo de RoundedButton ("primary"/"naranja"/"verde").
         command: callback del botón. Ignorado si `disabled=True`.
         disabled: arranca con el botón en `state="disabled"`.
+        width, height: si se pasan, se fuerza el tamaño exacto.
 
     Returns:
-        El RoundedButton del botón inferior — útil si el caller necesita
-        re-configurar el comando o el estado más tarde.
+        Tupla `(card, boton)`:
+            - card: el Frame para que el caller decida cómo empaquetarlo.
+            - boton: el RoundedButton interior, expuesto para tests y
+              para reconfig posterior del command/state.
     """
     card = tk.Frame(
         parent,
@@ -752,7 +757,9 @@ def _crear_card_visual(
         highlightbackground=branding.ISA_GRIS_BORDE,
         bd=0,
     )
-    card.pack(side="left", padx=6)
+    if width is not None and height is not None:
+        card.configure(width=width, height=height)
+        card.pack_propagate(False)
 
     tk.Label(
         card,
@@ -783,7 +790,31 @@ def _crear_card_visual(
         boton.config(state="disabled")
     boton.pack(pady=(0, 16), padx=12)
 
-    return boton
+    return card, boton
+
+
+def _crear_panel_card(parent: tk.Misc) -> tk.Frame:
+    """Frame con bg blanco + borde gris 1 px para envolver el contenido
+    interactivo de un sub-formulario (botones, entries, listbox, etc.).
+
+    Replica la estética de las cards del menú principal para que TODA la
+    app tenga el mismo lenguaje visual: contenedores blancos con borde
+    sutil sobre el fondo blanco general. Los widgets que se pasen como
+    hijos heredarán el `bg` del panel automáticamente porque
+    `RoundedButton` lee `parent.cget("bg")` para mezclar sus esquinas.
+
+    Se empaqueta con `pady=(4, 8)` y `padx=20` para dar el aire
+    consistente al contenedor; el caller solo agrega widgets adentro.
+    """
+    panel = tk.Frame(
+        parent,
+        bg=branding.ISA_BLANCO,
+        highlightthickness=1,
+        highlightbackground=branding.ISA_GRIS_BORDE,
+        bd=0,
+    )
+    panel.pack(pady=(4, 8), padx=20)
+    return panel
 
 
 def _crear_header_form(
@@ -866,22 +897,23 @@ def abrir_activos_fijos(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
 
     status_var = tk.StringVar(value="")
 
-    # Width fijo en px para que los 4 botones de esta vista queden
-    # alineados visualmente (el equivalente al `width=24` chars del
-    # tk.Button original — RoundedButton mide en píxeles).
+    # Los 4 botones de acción + el status viven dentro de un panel-card
+    # blanco con borde gris — mismo lenguaje visual que las cards del
+    # menú principal. Ancho fijo del botón: 260 px.
+    panel = _crear_panel_card(frame_activos)
     _ANCHO_BOTON_ACTIVOS = 260
 
     btn_extraer = branding.RoundedButton(
-        frame_activos,
+        panel,
         text="Extraer información en txt",
         style="primary",
         padx=18, pady=8, width=_ANCHO_BOTON_ACTIVOS,
         command=lambda: extraer_lsmw_a_txt(status_var),
     )
-    btn_extraer.pack(pady=(8, 8))
+    btn_extraer.pack(pady=(14, 8), padx=18)
 
     btn_creacion = branding.RoundedButton(
-        frame_activos,
+        panel,
         text="Creación de Activo",
         style="primary",
         padx=18, pady=8, width=_ANCHO_BOTON_ACTIVOS,
@@ -890,34 +922,34 @@ def abrir_activos_fijos(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
         command=lambda: subir_a_sap(root, status_var, btn_creacion),
         state="disabled",
     )
-    btn_creacion.pack(pady=(0, 8))
+    btn_creacion.pack(pady=(0, 8), padx=18)
 
     btn_extraer_creados = branding.RoundedButton(
-        frame_activos,
+        panel,
         text="Extraer Activos Creados",
         style="primary",
         padx=18, pady=8, width=_ANCHO_BOTON_ACTIVOS,
         command=lambda: abrir_extraer_creados(root, frame_activos),
     )
-    btn_extraer_creados.pack(pady=(0, 8))
+    btn_extraer_creados.pack(pady=(0, 8), padx=18)
 
     btn_subir_anexos = branding.RoundedButton(
-        frame_activos,
+        panel,
         text="Subir Anexos",
         style="primary",
         padx=18, pady=8, width=_ANCHO_BOTON_ACTIVOS,
         command=lambda: abrir_subir_anexos(root, frame_activos),
     )
-    btn_subir_anexos.pack(pady=(0, 8))
+    btn_subir_anexos.pack(pady=(0, 14), padx=18)
 
     tk.Label(
-        frame_activos,
+        panel,
         textvariable=status_var,
         font=("Helvetica", 9),
         fg=branding.ISA_VERDE_OK,
-        bg=branding.ISA_FONDO,
-        wraplength=440,
-    ).pack(pady=(12, 0))
+        bg=branding.ISA_BLANCO,
+        wraplength=400,
+    ).pack(pady=(0, 14), padx=18)
 
     # Polling scoped al frame: se inicia ahora, se cancela cuando el
     # frame se destruye (vía el binding <Destroy>). Esto evita callbacks
@@ -981,12 +1013,16 @@ def abrir_extraer_creados(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
         subtitulo="Consulta de activos creados por usuario SAP",
     )
 
-    form = tk.Frame(frame_extraer, bg=branding.ISA_FONDO)
-    form.pack(pady=(12, 12))
+    # Form (input + botón) dentro de un panel-card blanco con borde
+    # gris — mismo lenguaje visual que las cards del menú principal.
+    panel = _crear_panel_card(frame_extraer)
+
+    form = tk.Frame(panel, bg=branding.ISA_BLANCO)
+    form.pack(pady=(16, 12), padx=18)
 
     tk.Label(
         form, text="Usuario SAP:", anchor="e", width=12,
-        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+        bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
         font=("Helvetica", 10),
     ).grid(row=0, column=0, padx=4, pady=8, sticky="e")
 
@@ -998,7 +1034,7 @@ def abrir_extraer_creados(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     usuario_entry.grid(row=0, column=1, padx=4, pady=8, sticky="w")
 
     btn_ejecutar = branding.RoundedButton(
-        frame_extraer,
+        panel,
         text="Ejecutar",
         style="primary",
         padx=18, pady=8, width=170,
@@ -1008,7 +1044,7 @@ def abrir_extraer_creados(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
             root, usuario_var.get(), btn_ejecutar, btn_atras,
         )
     )
-    btn_ejecutar.pack(pady=(12, 0))
+    btn_ejecutar.pack(pady=(0, 16), padx=18)
 
     frame_extraer.pack(fill="both", expand=True)
 
@@ -1048,13 +1084,18 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
         subtitulo="Adjunta archivos a los activos creados en SAP",
     )
 
+    # Todo el contenido interactivo (combo + botones + listbox + botón
+    # principal + status) vive dentro de un panel-card blanco con borde
+    # gris — mismo lenguaje visual que las cards del menú.
+    panel = _crear_panel_card(frame_anexos)
+
     # --- Form: Sociedad ---
-    form = tk.Frame(frame_anexos, bg=branding.ISA_FONDO)
-    form.pack(pady=(8, 8))
+    form = tk.Frame(panel, bg=branding.ISA_BLANCO)
+    form.pack(pady=(14, 6), padx=18)
 
     tk.Label(
         form, text="Sociedad:", anchor="e", width=10,
-        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+        bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
         font=("Helvetica", 10),
     ).grid(row=0, column=0, padx=4, pady=8, sticky="e")
 
@@ -1071,8 +1112,8 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     # --- File picker + listbox ---
     archivos_seleccionados: list[Path] = []
 
-    archivos_frame = tk.Frame(frame_anexos, bg=branding.ISA_FONDO)
-    archivos_frame.pack(pady=(8, 0))
+    archivos_frame = tk.Frame(panel, bg=branding.ISA_BLANCO)
+    archivos_frame.pack(pady=(6, 0), padx=18)
 
     btn_seleccionar = branding.RoundedButton(
         archivos_frame,
@@ -1093,11 +1134,12 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     btn_quitar.grid(row=0, column=1, padx=4, sticky="w")
 
     archivos_listbox = tk.Listbox(
-        frame_anexos, height=6, width=60,
+        panel, height=6, width=58,
         font=("Helvetica", 9),
         selectmode="single",
+        highlightthickness=0, bd=1, relief="solid",
     )
-    archivos_listbox.pack(pady=(8, 0))
+    archivos_listbox.pack(pady=(8, 0), padx=18)
 
     def _refrescar_listbox() -> None:
         archivos_listbox.delete(0, "end")
@@ -1130,7 +1172,7 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     status_var = tk.StringVar(value="")
 
     btn_subir = branding.RoundedButton(
-        frame_anexos,
+        panel,
         text="Subir Anexos a SAP",
         style="primary",
         padx=18, pady=8, width=235,
@@ -1145,19 +1187,19 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
             btn_atras,
         )
     )
-    btn_subir.pack(pady=(14, 6))
+    btn_subir.pack(pady=(14, 6), padx=18)
 
     # Status label legible: 10pt bold + padding inferior amplio para
     # que no quede pegado al borde de la ventana (donde se renderiza
     # recortado / borroso).
     tk.Label(
-        frame_anexos,
+        panel,
         textvariable=status_var,
         font=("Helvetica", 10, "bold"),
         fg=branding.ISA_VERDE_OK,
-        bg=branding.ISA_FONDO,
-        wraplength=560,
-    ).pack(pady=(10, 20))
+        bg=branding.ISA_BLANCO,
+        wraplength=520,
+    ).pack(pady=(10, 14), padx=18)
 
     frame_anexos.pack(fill="both", expand=True)
 
@@ -1193,14 +1235,19 @@ def abrir_sox_menu(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
         subtitulo="Procesos de control y auditoría",
     )
 
+    # Botón dentro de panel-card blanco — mismo lenguaje visual que
+    # el menú principal. A futuro se pueden añadir más botones HUB.PPE
+    # acá dentro sin tocar el resto.
+    panel = _crear_panel_card(frame_sox_menu)
+
     btn_hub_ppe_01 = branding.RoundedButton(
-        frame_sox_menu,
+        panel,
         text="HUB.PPE.01 Creación de Activos Fijos",
         style="primary",
         padx=18, pady=8, width=340,
         command=lambda: control_sox(root, frame_sox_menu),
     )
-    btn_hub_ppe_01.pack(pady=(12, 8))
+    btn_hub_ppe_01.pack(pady=(18, 18), padx=18)
 
     frame_sox_menu.pack(fill="both", expand=True)
 
@@ -1269,13 +1316,17 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
         bg=branding.ISA_FONDO,
     ).pack(pady=(0, 12))
 
-    form = tk.Frame(frame_sox, bg=branding.ISA_FONDO)
-    form.pack(pady=(0, 12))
+    # Todo el form + botón + status dentro de un panel-card blanco con
+    # borde gris — mismo lenguaje visual que el menú principal.
+    panel = _crear_panel_card(frame_sox)
+
+    form = tk.Frame(panel, bg=branding.ISA_BLANCO)
+    form.pack(pady=(16, 12), padx=18)
 
     # --- Sociedad (Combobox readonly) ---
     tk.Label(
         form, text="Sociedad:", anchor="e", width=10,
-        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+        bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
     ).grid(row=0, column=0, padx=4, pady=6, sticky="e")
     sociedad_var = tk.StringVar()
     sociedad_combo = ttk.Combobox(
@@ -1306,7 +1357,7 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
 
     tk.Label(
         form, text="Desde:", anchor="e", width=10,
-        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+        bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
     ).grid(row=1, column=0, padx=4, pady=6, sticky="e")
     desde_var = tk.StringVar()
     desde_entry = DateEntry(
@@ -1324,12 +1375,12 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     desde_entry.grid(row=1, column=1, padx=4, pady=6, sticky="w")
     tk.Label(
         form, text="(dd.mm.aaaa)",
-        fg=branding.ISA_GRIS_CLARO, bg=branding.ISA_FONDO,
+        fg=branding.ISA_GRIS_CLARO, bg=branding.ISA_BLANCO,
     ).grid(row=1, column=2, padx=4)
 
     tk.Label(
         form, text="Hasta:", anchor="e", width=10,
-        bg=branding.ISA_FONDO, fg=branding.ISA_AZUL,
+        bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
     ).grid(row=2, column=0, padx=4, pady=6, sticky="e")
     hasta_var = tk.StringVar()
     hasta_entry = DateEntry(
@@ -1347,13 +1398,13 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     hasta_entry.grid(row=2, column=1, padx=4, pady=6, sticky="w")
     tk.Label(
         form, text="(dd.mm.aaaa)",
-        fg=branding.ISA_GRIS_CLARO, bg=branding.ISA_FONDO,
+        fg=branding.ISA_GRIS_CLARO, bg=branding.ISA_BLANCO,
     ).grid(row=2, column=2, padx=4)
 
     status_var = tk.StringVar()
 
     btn_generar = branding.RoundedButton(
-        frame_sox,
+        panel,
         text="Generar Reporte SOX",
         style="primary",
         padx=18,
@@ -1370,16 +1421,16 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
             btn_atras,
         )
     )
-    btn_generar.pack()
+    btn_generar.pack(pady=(4, 14), padx=18)
 
     tk.Label(
-        frame_sox,
+        panel,
         textvariable=status_var,
         font=("Helvetica", 9),
         fg=branding.ISA_VERDE_OK,
-        bg=branding.ISA_FONDO,
-        wraplength=460,
-    ).pack(pady=(12, 0))
+        bg=branding.ISA_BLANCO,
+        wraplength=420,
+    ).pack(pady=(0, 14), padx=18)
 
     frame_sox.pack(fill="both", expand=True)
 
@@ -1484,27 +1535,23 @@ def main() -> None:
         bg=branding.ISA_FONDO,
     ).pack(pady=(4, 20))
 
-    # --- 3 cards visuales (Activos Fijos | Control SOX | Reportes) ---
-    # Cada card es un tk.Frame con borde plano 1 px gris claro (Tk no
-    # soporta drop-shadow nativo, así que el borde plano es la
-    # alternativa más limpia). Contiene:
-    #   - Espacio reservado para icono (vacío por ahora — al añadir el
-    #     PNG basta con poner el tk.Label dentro de `icon_frame`).
-    #   - Título grande en navy.
-    #   - Párrafo descriptivo gris centrado con wraplength.
-    #   - Botón al fondo con el color de la categoría
-    #     (navy/teal/púrpura) llenando el ancho de la card.
-    # `Reportes` queda con su botón en `state="disabled"` por ahora.
-    # No le ponemos `padx` aquí: las 3 cards juntas miden ~609 px de
-    # ancho (incluyendo su padx=6 interno) y deben caber centradas en
-    # la ventana de 620 px. Si añadimos padx en la row, las cards se
-    # salen por la derecha porque la geometría es fija.
-    cards_row = tk.Frame(frame_menu, bg=branding.ISA_FONDO)
-    cards_row.pack(pady=(12, 0))
+    # --- 3 cards visuales con layout 2 + 1 ---
+    #   Row arriba:   [ Activos Fijos ] [ Control SOX ]
+    #   Row abajo:           [ Reportes ]   (centrada)
+    #
+    # Las 3 cards se fuerzan a width=205 / height=180 con pack_propagate
+    # del Frame interno para que queden visualmente simétricas (mismo
+    # tamaño exacto) aunque los textos de descripción varíen en líneas.
+    # Borde plano 1 px gris (`ISA_GRIS_BORDE`) — Tk no soporta
+    # drop-shadow nativo.
+    _CARD_W, _CARD_H = 205, 180
 
-    btn_card_activos = _crear_card_visual(
-        cards_row,
-        titulo="Activos fijos",
+    cards_top = tk.Frame(frame_menu, bg=branding.ISA_FONDO)
+    cards_top.pack(pady=(12, 0))
+
+    card_activos, btn_card_activos = _crear_card_visual(
+        cards_top,
+        titulo="Activos Fijos",
         descripcion=(
             "Consulta y gestiona la información\n"
             "de los activos fijos de la compañía.\n"
@@ -1513,11 +1560,13 @@ def main() -> None:
         ),
         btn_texto="Acceder  →",
         btn_style="primary",
+        width=_CARD_W, height=_CARD_H,
         command=lambda: abrir_activos_fijos(root, frame_menu),
     )
+    card_activos.pack(side="left", padx=8)
 
-    btn_card_sox = _crear_card_visual(
-        cards_row,
+    card_sox, btn_card_sox = _crear_card_visual(
+        cards_top,
         titulo="Control SOX",
         descripcion=(
             "Revisa y da seguimiento a los\n"
@@ -1526,11 +1575,16 @@ def main() -> None:
         ),
         btn_texto="Continuar  →",
         btn_style="naranja",
+        width=_CARD_W, height=_CARD_H,
         command=lambda: abrir_sox_menu(root, frame_menu),
     )
+    card_sox.pack(side="left", padx=8)
 
-    btn_card_reportes = _crear_card_visual(
-        cards_row,
+    cards_bottom = tk.Frame(frame_menu, bg=branding.ISA_FONDO)
+    cards_bottom.pack(pady=(12, 0))
+
+    card_reportes, btn_card_reportes = _crear_card_visual(
+        cards_bottom,
         titulo="Reportes",
         descripcion=(
             "Genera y consulta reportes\n"
@@ -1540,8 +1594,12 @@ def main() -> None:
         ),
         btn_texto="Ver reportes  →",
         btn_style="verde",
+        width=_CARD_W, height=_CARD_H,
         disabled=True,
     )
+    # Sin `side` ni `padx`: el Frame `cards_bottom` solo contiene esta
+    # card, así que pack default la centra horizontalmente.
+    card_reportes.pack()
     btn_card_reportes.pack(side="left", padx=10)
 
     # Botón de diagnóstico "Test conexión SAP": se conserva el código pero
