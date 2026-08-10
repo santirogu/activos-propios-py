@@ -16,10 +16,12 @@ Importante:
       vas a obtener un binario nativo de esa plataforma — útil sólo
       como dry-run para validar que el spec parsea y los `datas` /
       `hiddenimports` resuelven.
-    - El usuario final solo necesita el `.exe`. El `Formato_Dinamico_`
+    - El usuario final solo necesita el `.exe`. El `Formato_Dinamico.xlsm`
       viene bundleado como factory default y la app lo extrae a
-      `<EXE_DIR>/resources/` en el primer arranque para que el usuario
+      `<EXE_DIR>/entrada/` en el primer arranque para que el usuario
       lo pueda editar después (ver `paths.asegurar_formato_dinamico`).
+      La carpeta se llama `entrada/` (no `resources/`) para no confundirla
+      con la `resources/` interna del proyecto.
     - El logo se lee como recurso bundled (read-only) desde
       `sys._MEIPASS` vía `paths.bundled_resource_path` (ver
       `branding.LOGO_PATH`).
@@ -49,10 +51,12 @@ a = Analysis(
         # Logo: read-only, bundleado en sys._MEIPASS. Branding.LOGO_PATH
         # lo resuelve via paths.bundled_resource_path.
         ("resources/logo_hub_isa.png", "resources"),
-        # Formato dinámico: factory default. La app lo copia a
-        # <EXE_DIR>/resources/ la primera vez (asegurar_formato_dinamico)
-        # y a partir de ahí lee del externo editable.
-        ("resources/Formato_Dinamico_.xlsx", "resources"),
+        # Formato dinámico: factory default (.xlsm con macros). La app lo
+        # copia a <EXE_DIR>/entrada/ la primera vez (asegurar_formato_dinamico)
+        # y a partir de ahí lee del externo editable. Se bundlea dentro de
+        # `resources/` del _MEIPASS (read-only); la carpeta externa editable
+        # es `entrada/`.
+        ("resources/Formato_Dinamico.xlsm", "resources"),
         # Los .vbs de resources/ NO se bundlean: son referencia para
         # devs (grabaciones SAP) y no las necesita el runtime.
     ],

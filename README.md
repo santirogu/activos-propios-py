@@ -11,7 +11,7 @@ Aplicación de escritorio en Python que automatiza dos pasos del proceso de crea
 
 El proceso completo contempla:
 
-1. **INICIO** — el usuario diligencia el formulario de creación en el archivo Excel maestro (`Formato_Dinamico_.xlsx`).
+1. **INICIO** — el usuario diligencia el formulario de creación en el archivo Excel maestro (`Formato_Dinamico.xlsm`, con macros).
 2. **Formulario de creación** — captura de los datos del activo en la hoja `Formato`.
 3. **Extraer hoja LSMW en un `.txt`** — *automatizado por el botón "Extraer información en txt"*.
 4. **Login en SAP** — paso manual realizado por el usuario.
@@ -28,7 +28,7 @@ El proceso completo contempla:
 - **tkcalendar** — widget de calendario para los campos de fecha del Control SOX (multiplataforma).
 - **Pillow** ≥ 10.0 — captura de pantalla para las evidencias IPE del Reporte SOX (multiplataforma; en Windows captura desktop completo incluyendo barra de tareas).
 - **pywin32** — solo necesario para los botones "Subir a SAP" y "Generar Reporte SOX". Se instala automáticamente solo en Windows gracias al marcador `platform_system == "Windows"` en `requirements.txt`.
-- El archivo `resources/Formato_Dinamico_.xlsx` debe existir.
+- Debe existir **uno y solo un** archivo `.xlsm` en la carpeta `entrada/` (el `Formato_Dinamico.xlsm`). La app copia el factory default desde `resources/` a `entrada/` en el primer arranque si la carpeta está vacía; si hay más de un `.xlsm`, la extracción se detiene con una advertencia.
 - Para subir a SAP: SAP GUI for Windows abierto con sesión iniciada y `sapgui/user_scripting = TRUE` (ver sección "Configuración SAP" más abajo).
 
 ## Quick start
@@ -73,7 +73,8 @@ Reemplaza la vista del menú por un sub-formulario con cuatro botones:
 
 #### "Extraer información en txt"
 
-- Lee la hoja `LSMW` de `resources/Formato_Dinamico_.xlsx`.
+- Lee la hoja `LSMW` del `Formato_Dinamico.xlsm` que esté en la carpeta `entrada/`.
+- **Verifica primero que haya un solo `.xlsm` en `entrada/`.** Si hay más de uno, muestra una advertencia y **no continúa** hasta que quede uno solo (la elección del archivo sería ambigua).
 - Crea la carpeta `salida/` en la raíz si no existe.
 - **Si ya existe un `.txt` previo en `salida/`** muestra un diálogo SÍ/NO preguntando si reemplazarlo:
   - **SÍ** → borra los `.txt` existentes y genera uno nuevo.
@@ -259,15 +260,15 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **334 pruebas** distribuidas en seis archivos:
+La suite contiene **361 pruebas** distribuidas en siete archivos:
 
-#### `tests/test_main.py` (99 pruebas)
+#### `tests/test_main.py` (100 pruebas)
 
 **`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
 
 **`RealWorkbookSmokeTest`** (1 prueba) — smoke test contra el Excel real del proyecto.
 
-**`ExtraerLsmwATxtTest`** (7 pruebas) — handler del botón "Extraer información en txt":
+**`ExtraerLsmwATxtTest`** (8 pruebas) — handler del botón "Extraer información en txt":
 
 | Test | Qué valida |
 |---|---|
@@ -278,6 +279,7 @@ La suite contiene **334 pruebas** distribuidas en seis archivos:
 | `test_no_keeps_existing_and_does_not_extract` | NO → no borra, no extrae, no muestra mensaje de éxito |
 | `test_no_updates_status_with_cancellation_message` | NO → status_var con texto de cancelación |
 | `test_ignores_non_lsmw_files_when_checking_existing` | Archivos que no son `LSMW_*.txt` no disparan el diálogo |
+| `test_warns_and_aborts_when_multiple_xlsm_in_entrada` | Con ≥2 `.xlsm` en `entrada/` → advierte y aborta (no extrae) |
 
 **`ExtraerLsmwATxtErrorPathsTest`** (4 pruebas) — verifica que toda excepción durante la extracción se muestra al usuario: `FileNotFoundError` (Excel ausente), `ValueError` (hoja ausente), excepción genérica del export, y la red de seguridad para errores inesperados (ej. `OUTPUT_DIR.glob` falla por permisos) que muestra el traceback en el diálogo.
 
@@ -358,15 +360,25 @@ La suite contiene **334 pruebas** distribuidas en seis archivos:
 
 **Estrategia de mocking GUI**: `_SyncFakeThread` reemplaza `threading.Thread` para ejecutar el worker síncrono; `root.after` se sobreescribe en `setUp` para invocar callbacks inmediatamente. `patch.multiple("sap_upload", ...)` inyecta los mocks de las funciones del módulo; los mocks se guardan en `self.mocks` para verificación.
 
-#### `tests/test_paths.py` (7 pruebas)
+#### `tests/test_paths.py` (18 pruebas)
 
-Valida los helpers de `src/paths.py` que distinguen entre modo dev (`python src/main.py`) y modo bundled (PyInstaller `.exe`).
+Valida los helpers de `src/paths.py` que distinguen entre modo dev (`python src/main.py`) y modo bundled (PyInstaller `.exe`), y la resolución/validación del `Formato_Dinamico.xlsm` en la carpeta `entrada/`.
 
-**`ProjectRootTest`** (2 pruebas) — `project_root()` devuelve el padre de `src/` en dev y la carpeta del `.exe` en frozen (vía `sys.executable`). Si este test falla, en bundled mode `salida/` y `resources/` quedarían dentro del temp `_MEIPASS` y se borrarían al cerrar la app.
+**`ProjectRootTest`** (2 pruebas) — `project_root()` devuelve el padre de `src/` en dev y la carpeta del `.exe` en frozen (vía `sys.executable`). Si este test falla, en bundled mode `salida/` y `entrada/` quedarían dentro del temp `_MEIPASS` y se borrarían al cerrar la app.
 
 **`BundledResourcePathTest`** (2 pruebas) — `bundled_resource_path()` lee de `sys._MEIPASS` cuando está presente (bundled), del repo cuando no (dev). Es lo que usa `branding.LOGO_PATH`.
 
-**`AsegurarFormatoDinamicoTest`** (3 pruebas) — el "factory default": primer arranque copia el `Formato_Dinamico_` bundleado a `<EXE_DIR>/resources/`; arranques posteriores NO sobrescriben las ediciones del usuario; si el bundle tampoco existe, devuelve el path sin crashear para que el caller reporte error claro.
+**`ListarXlsmEntradaTest`** (4 pruebas) — `listar_xlsm_entrada()` lista los `.xlsm` de `entrada/` (vacío si la carpeta no existe, uno, varios ordenados, ignora otras extensiones).
+
+**`FormatoDinamicoPathTest`** (3 pruebas) — `formato_dinamico_path()` prefiere el nombre canónico `Formato_Dinamico.xlsm`; si no está usa el primer `.xlsm`; si `entrada/` está vacía devuelve el path canónico esperado.
+
+**`ValidarEntradaUnicaTest`** (3 pruebas) — `validar_entrada_unica()` devuelve OK con 0 o 1 archivo, y advierte (`MENSAJE_ENTRADA_MULTIPLE`) con 2 o más.
+
+**`AsegurarFormatoDinamicoTest`** (4 pruebas) — el "factory default": primer arranque copia el `Formato_Dinamico.xlsm` bundleado a `<EXE_DIR>/entrada/`; arranques posteriores NO sobrescriben las ediciones del usuario; NO copia si el usuario dejó un `.xlsm` con otro nombre (evita crear un segundo archivo); si el bundle tampoco existe, devuelve el path sin crashear para que el caller reporte error claro.
+
+#### `tests/test_branding.py` (15 pruebas)
+
+Valida el branding corporativo de `src/branding.py`: la paleta Hub de ISA (constantes de color), `cargar_logo` (escalado por aspect ratio y manejo de referencias persistentes / archivo ausente) y los helpers `aplicar_estilo_primario` / `aplicar_estilo_terciario`.
 
 **`tests/test_main.py`** — además de las clases anteriores, incluye `FooterCopyrightTest` (3 pruebas: texto contiene `© {año} El Hub de ISA`, font/color discretos, packed `side="bottom"`), `CerrarSplashTest` (1 prueba: no-op silencioso en dev mode cuando `pyi_splash` no está disponible), y `test_date_entries_do_not_use_key_validation` dentro de `ControlSoxDialogTest` (regresión del bug del calendario donde `validate="key"` rompía el `_select` del popup).
 
@@ -411,9 +423,9 @@ Ambas carpetas están en `.gitignore`.
 1. Doble-clic sobre `dist\GestionActivosFijos.exe` → la ventana de la app debe abrirse en ~2–4 s.
 2. Verificar que el logo aparece (bundleado dentro del `.exe`).
 3. La primera ejecución crea automáticamente:
-   - `resources\Formato_Dinamico_.xlsx` al lado del `.exe` (factory default extraído del bundle, editable por el usuario).
+   - `entrada\Formato_Dinamico.xlsm` al lado del `.exe` (factory default extraído del bundle, editable por el usuario).
    - `salida\` cuando se ejecuta el primer flujo (extracción TXT, Reporte SOX, etc.).
-4. Probar el botón **"Extraer información en txt"** (no requiere SAP) — verifica que la lectura de `resources\Formato_Dinamico_.xlsx` y la escritura en `salida\` funcionan.
+4. Probar el botón **"Extraer información en txt"** (no requiere SAP) — verifica que la lectura de `entrada\Formato_Dinamico.xlsm` y la escritura en `salida\` funcionan.
 
 ### Distribución al usuario final
 
@@ -427,14 +439,14 @@ El usuario:
    ```
    GestionActivos\
    ├── GestionActivosFijos.exe
-   ├── resources\
-   │   └── Formato_Dinamico_.xlsx     # editable por el usuario sin rebuild
+   ├── entrada\
+   │   └── Formato_Dinamico.xlsm      # editable por el usuario sin rebuild (un solo .xlsm)
    └── salida\                         # outputs (LSMW_*.txt, Población_*.xlsx, etc.)
    ```
 
 ### Actualizaciones
 
-Cada release re-genera el `.exe`. El usuario solo reemplaza el archivo binario. Las carpetas `salida\` y `resources\` (con su `Formato_Dinamico_.xlsx` editado) se preservan automáticamente porque viven al lado del `.exe`, no dentro de él.
+Cada release re-genera el `.exe`. El usuario solo reemplaza el archivo binario. Las carpetas `salida\` y `entrada\` (con su `Formato_Dinamico.xlsm` editado) se preservan automáticamente porque viven al lado del `.exe`, no dentro de él.
 
 ### Falsos positivos de antivirus
 
@@ -447,9 +459,9 @@ Algunos antivirus corporativos marcan ejecutables generados con PyInstaller como
 
 - **`src/paths.py`** centraliza la resolución de rutas. Detecta `sys.frozen` (modo bundled vs dev) y `sys._MEIPASS` (carpeta temporal donde PyInstaller descomprime los recursos read-only).
 - En **dev mode** (`python src/main.py`), `PROJECT_ROOT` es el padre de `src/`.
-- En **bundled mode** (`.exe`), `PROJECT_ROOT` es la carpeta del `.exe` — por eso `salida\` y `resources\` siempre viven al lado del binario, no dentro de él.
+- En **bundled mode** (`.exe`), `PROJECT_ROOT` es la carpeta del `.exe` — por eso `salida\` y `entrada\` siempre viven al lado del binario, no dentro de él.
 - El **logo** se lee bundled-only desde `sys._MEIPASS/resources/logo_hub_isa.png` (ver `branding.LOGO_PATH`).
-- El **Formato_Dinamico_.xlsx** se bundlea como *factory default* y `paths.asegurar_formato_dinamico()` lo extrae a `<EXE_DIR>\resources\` en el primer arranque. A partir de ahí la app siempre lee del externo (editable por el usuario sin rebuild).
+- El **Formato_Dinamico.xlsm** se bundlea (dentro de `resources/` del `_MEIPASS`, read-only) como *factory default* y `paths.asegurar_formato_dinamico()` lo extrae a `<EXE_DIR>\entrada\` en el primer arranque si esa carpeta no tiene ningún `.xlsm`. A partir de ahí la app siempre lee del externo (editable por el usuario sin rebuild). La carpeta externa se llama `entrada\` — no `resources\` — para no confundirla con la `resources/` interna del proyecto.
 
 ### Decisiones del `GestionActivosFijos.spec`
 
@@ -458,7 +470,7 @@ Las claves del spec, documentadas para que sean intencionales:
 - **`console=False`** — la app es GUI; no abre un terminal negro al doble-clic.
 - **`--onefile`** (implícito por el spec con `EXE(... a.binaries, a.zipfiles, a.datas, ...)`) — un único archivo para distribución simple.
 - **`icon` solo en Windows** — el spec lo setea condicionalmente con `_sys.platform == "win32"`. En macOS/Linux se ignora para que el dry-run funcione.
-- **`datas`** — bundlean `logo_hub_isa.png` (read-only) y `Formato_Dinamico_.xlsx` (factory default editable).
+- **`datas`** — bundlean `logo_hub_isa.png` (read-only) y `Formato_Dinamico.xlsm` (factory default; se copia a `entrada\` en el primer arranque).
 - **`hiddenimports`** — `win32com.client`, `pythoncom`, `PIL._tkinter_finder`, `babel.numbers`, `babel.dates`. Son módulos que el análisis estático no detecta porque se cargan dinámicamente.
 - **`excludes`** — `matplotlib`, `numpy`, `pandas`, `scipy`. Paquetes pesados que el proyecto no usa pero que a veces se cuelan por análisis transitivo (Pillow, openpyxl).
 - **`Splash`** — pantalla de carga que el bootloader muestra INMEDIATAMENTE al doble-clic, antes de descomprimir el bundle de `--onefile`. Para el usuario eso convierte 5–8 s de "no pasa nada" en 5–8 s de "está cargando". El runtime cierra el splash desde `main._cerrar_splash()` cuando la ventana Tk ya está visible. Sólo se incluye en Windows/Linux (en macOS PyInstaller no lo soporta y el spec lo salta automáticamente).
@@ -493,14 +505,15 @@ No sirve para entregar al usuario final.
 │   ├── extraer_activos_creados.py   # SM35P: filtro por usuario SAP + export del log
 │   └── subir_anexos.py              # AS02 + GOS PCATTA_CREA: adjunta archivos a cada activo
 ├── tests/
-│   ├── test_main.py                 # 99 pruebas: extracción + botones + vistas + footer + splash + regresión calendario
-│   ├── test_paths.py                # 7 pruebas: helpers dev/bundled + factory default
+│   ├── test_main.py                 # 100 pruebas: extracción + botones + vistas + footer + splash + regresión calendario
+│   ├── test_paths.py                # 18 pruebas: helpers dev/bundled + resolución entrada/ + factory default + validación 1-xlsm
+│   ├── test_branding.py             # 15 pruebas: paleta + logo + estilos de botón
 │   ├── test_sap_upload.py           # 46 pruebas: flujo LSMW completo
 │   ├── test_sox_report.py           # 105 pruebas: validaciones + flujo SOX + Población + Creados + IPE
 │   ├── test_extraer_activos_creados.py  # 48 pruebas
 │   └── test_subir_anexos.py         # 29 pruebas
-├── resources/
-│   ├── Formato_Dinamico_.xlsx       # Formato maestro con catálogos y plantilla (factory default bundled)
+├── resources/                       # Recursos internos del proyecto (bundleados read-only en el .exe)
+│   ├── Formato_Dinamico.xlsm        # Formato maestro (.xlsm con macros): factory default con catálogos y plantilla
 │   ├── logo_hub_isa.png             # Logo Hub de ISA (bundled, read-only en el .exe)
 │   ├── script_sap_base.txt          # Grabación VBS del flujo LSMW (UTF-16)
 │   ├── Script1.vbs                  # Grabación VBS: ruta dinámica en Specify Files
@@ -509,6 +522,7 @@ No sirve para entregar al usuario final.
 │   └── Scriptanexo.vbs              # Grabación VBS del flujo AS02 + GOS PCATTA_CREA
 ├── docs/
 │   └── flujo-proceso.png            # Diagrama del proceso completo
+├── entrada/                         # Generada en runtime junto al .exe: el Formato_Dinamico.xlsm editable (ignorada por git)
 ├── salida/                          # Carpeta generada con los outputs (LSMW_*.txt, Población_*.xlsx, ...)
 ├── GestionActivosFijos.spec         # Config de PyInstaller para generar el .exe (ver sección "Build del ejecutable")
 ├── requirements.txt                 # openpyxl + tkcalendar + Pillow + pywin32 (Windows only)

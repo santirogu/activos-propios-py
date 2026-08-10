@@ -108,7 +108,7 @@ class RealWorkbookSmokeTest(unittest.TestCase):
     """Smoke test contra el Excel real del proyecto si está disponible."""
 
     REAL_EXCEL = (
-        Path(__file__).resolve().parent.parent / "resources" / "Formato_Dinamico_.xlsx"
+        Path(__file__).resolve().parent.parent / "resources" / "Formato_Dinamico.xlsm"
     )
 
     def setUp(self) -> None:
@@ -120,7 +120,7 @@ class RealWorkbookSmokeTest(unittest.TestCase):
 
     def test_extracts_lsmw_sheet_from_real_file(self) -> None:
         if not self.REAL_EXCEL.exists():
-            self.skipTest("Archivo Formato_Dinamico_.xlsx no disponible")
+            self.skipTest("Archivo Formato_Dinamico.xlsm no disponible")
 
         out_path, rows = export_sheet_to_tsv(self.REAL_EXCEL, "LSMW ", self.output_dir)
 
@@ -142,13 +142,38 @@ class ExtraerLsmwATxtTest(unittest.TestCase):
         self.status_var = tk.StringVar(master=self.root)
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp_salida = Path(self._tmp.name)
+        # La validación de "un solo .xlsm en entrada/" lee la carpeta real
+        # del repo; la neutralizamos aquí para que estos tests sean
+        # herméticos (el caso de conflicto tiene su propio test).
+        self._validar_patch = patch(
+            "main.validar_entrada_unica", return_value=(True, None)
+        )
+        self._validar_patch.start()
 
     def tearDown(self) -> None:
+        self._validar_patch.stop()
         self._tmp.cleanup()
         self.root.destroy()
 
     def _patch_output_dir(self):
         return patch("main.OUTPUT_DIR", self.tmp_salida)
+
+    def test_warns_and_aborts_when_multiple_xlsm_in_entrada(self) -> None:
+        """Si hay más de un .xlsm en entrada/, se advierte al usuario y NO
+        se extrae (no se llama a export_sheet_to_tsv)."""
+        with self._patch_output_dir(), \
+             patch("main.validar_entrada_unica",
+                   return_value=(False, "Conflicto: sobran .xlsm")), \
+             patch("main.export_sheet_to_tsv") as mock_export, \
+             patch("main.messagebox.showwarning") as mock_warn, \
+             patch("main.messagebox.askyesno") as mock_ask:
+            main.extraer_lsmw_a_txt(self.status_var)
+
+        mock_warn.assert_called_once()
+        self.assertIn("Conflicto", mock_warn.call_args[0][1])
+        mock_export.assert_not_called()
+        mock_ask.assert_not_called()
+        self.assertIn("entrada", self.status_var.get().lower())
 
     def test_proceeds_directly_when_no_existing_txt(self) -> None:
         with self._patch_output_dir(), \
@@ -255,8 +280,13 @@ class ExtraerLsmwATxtErrorPathsTest(unittest.TestCase):
         self.status_var = tk.StringVar(master=self.root)
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp_salida = Path(self._tmp.name)
+        self._validar_patch = patch(
+            "main.validar_entrada_unica", return_value=(True, None)
+        )
+        self._validar_patch.start()
 
     def tearDown(self) -> None:
+        self._validar_patch.stop()
         self._tmp.cleanup()
         self.root.destroy()
 

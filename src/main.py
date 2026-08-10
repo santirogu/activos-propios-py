@@ -17,9 +17,9 @@ from paths import (
     SALIDA_DIR,
     asegurar_formato_dinamico,
     formato_dinamico_path,
+    validar_entrada_unica,
 )
 
-EXCEL_PATH = formato_dinamico_path()
 OUTPUT_DIR = SALIDA_DIR
 SHEET_NAME = "LSMW "
 
@@ -192,7 +192,22 @@ def extraer_lsmw_a_txt(status_var: tk.StringVar) -> None:
     try:
         _log("Botón 'Extraer información en txt' presionado")
         _log(f"OUTPUT_DIR = {OUTPUT_DIR}")
-        _log(f"EXCEL_PATH = {EXCEL_PATH}")
+
+        # Antes de leer, verificar que en la carpeta «entrada» haya UN solo
+        # .xlsm. Con más de uno la elección del archivo es ambigua, así que
+        # advertimos al usuario y abortamos para que deje solo el correcto.
+        entrada_ok, advertencia = validar_entrada_unica()
+        if not entrada_ok:
+            _log(f"Conflicto en carpeta entrada/: {advertencia}")
+            messagebox.showwarning("Conflicto en la carpeta «entrada»", advertencia)
+            status_var.set(
+                "Hay más de un Formato Dinámico en la carpeta «entrada». "
+                "Deja solo uno."
+            )
+            return
+
+        excel_path = formato_dinamico_path()
+        _log(f"EXCEL_PATH = {excel_path}")
 
         # Si ya existe(n) .txt previo(s) en salida/, pedir confirmación antes
         # de reemplazar.
@@ -228,7 +243,7 @@ def extraer_lsmw_a_txt(status_var: tk.StringVar) -> None:
         _log("Generando nuevo .txt desde la hoja LSMW...")
         try:
             output_path, rows_written = export_sheet_to_tsv(
-                EXCEL_PATH, SHEET_NAME, OUTPUT_DIR
+                excel_path, SHEET_NAME, OUTPUT_DIR
             )
         except FileNotFoundError as exc:
             _log(f"FileNotFoundError: {exc}")
@@ -1476,17 +1491,17 @@ def _test_conexion_sap_handler() -> None:
 
 
 def main() -> None:
-    # En modo bundled (.exe), si es el primer arranque y el usuario aún
-    # no tiene `Formato_Dinamico_.xlsx` al lado del ejecutable, lo
-    # extraemos desde el bundle como factory default. Después de esto
-    # el archivo es externo y editable. En dev mode es no-op (el archivo
-    # ya está en resources/).
+    # En modo bundled (.exe), si es el primer arranque y la carpeta
+    # `entrada/` al lado del ejecutable aún no tiene ningún `.xlsm`, lo
+    # extraemos desde el bundle como factory default (`Formato_Dinamico.xlsm`).
+    # Después de esto el archivo es externo y editable. En dev mode copia
+    # a `<repo>/entrada/` desde `<repo>/resources/`.
     try:
-        _, recien_creado = asegurar_formato_dinamico()
+        ruta_formato, recien_creado = asegurar_formato_dinamico()
         if recien_creado:
             _log(
                 "Primer arranque: se creó "
-                f"{EXCEL_PATH.name} en {EXCEL_PATH.parent}. "
+                f"{ruta_formato.name} en {ruta_formato.parent}. "
                 "Puedes editarlo libremente."
             )
     except Exception as exc:

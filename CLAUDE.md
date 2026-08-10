@@ -1,6 +1,6 @@
 # memory.md — Contexto del proyecto `activos-propios-py`
 
-> Snapshot del proyecto al 2026-05-24. Generado leyendo `README.md`, `src/`, `tests/`, `resources/` y `requirements.txt`.
+> Snapshot del proyecto al 2026-08-09. Generado leyendo `README.md`, `src/`, `tests/`, `resources/` y `requirements.txt`.
 
 ## 1. Propósito
 
@@ -34,30 +34,35 @@ La autenticación SAP es manual; el script no logea al usuario, solo se conecta 
 │   ├── sox_report.py    # Flujo Reporte SOX (4 pasos) vía SAP GUI Scripting
 │   ├── extraer_activos_creados.py  # Flujo SM35P (4 pasos): filtro por usuario + export log
 │   ├── subir_anexos.py  # Flujo AS02 + GOS PCATTA_CREA: adjunta archivos a cada activo
-│   └── branding.py      # Paleta corporativa Hub de ISA + helpers para Tk
+│   ├── branding.py      # Paleta corporativa Hub de ISA + helpers para Tk
+│   └── paths.py         # Resolución de rutas dev/bundled + factory default + carpeta entrada/
 ├── tests/
-│   ├── test_main.py                       # 99 pruebas: extracción + botones + vistas + footer + splash + regresión calendario
-│   ├── test_paths.py                      # 7 pruebas: helpers dev/bundled + factory default Formato_Dinamico_
+│   ├── test_main.py                       # 100 pruebas: extracción + botones + vistas + footer + splash + regresión calendario
+│   ├── test_paths.py                      # 18 pruebas: helpers dev/bundled + resolución entrada/ + factory default + validación 1-xlsm
+│   ├── test_branding.py                   # 15 pruebas: paleta + logo + estilos de botón
 │   ├── test_sap_upload.py                 # 46 pruebas: cada paso del flujo LSMW aislado
 │   ├── test_sox_report.py                 # 105 pruebas: validaciones + flujo SOX + Población + Creados + IPE
 │   ├── test_extraer_activos_creados.py    # 48 pruebas
 │   └── test_subir_anexos.py               # 29 pruebas
-├── resources/
-│   ├── Formato_Dinamico_.xlsx        # Excel maestro con hojas "Formato" y "LSMW "
+├── resources/                        # Recursos internos del proyecto (bundleados read-only en el .exe)
+│   ├── Formato_Dinamico.xlsm         # Formato maestro (.xlsm con macros); factory default con hojas "Formato" y "LSMW "
 │   ├── Población_ISA_31.03.2026.xlsx # Insumo del cliente
+│   ├── logo_hub_isa.png              # Logo corporativo Hub de ISA (RGBA 469×286)
 │   ├── script_sap_base.txt           # Grabación VBS del flujo LSMW (UTF-16)
 │   ├── Script1.vbs / Script2.vbs     # Grabaciones VBS del flujo LSMW (paso Specify Files)
-│   ├── Scriptsox.vbs                 # Grabación VBS original del SOX (árbol F00xxx, frágil)
-│   └── Script2sox.vbs                # Grabación VBS actual del SOX (T-code AR15 + calendario F4)
+│   ├── Script2sox.vbs                # Grabación VBS del SOX (T-code AR15 + calendario F4)
+│   ├── ScriptSM35P.vbs               # Grabación VBS del flujo Extraer Activos Creados
+│   └── Scriptanexo.vbs               # Grabación VBS del flujo Subir Anexos
 ├── docs/
 │   └── flujo-proceso.png             # Diagrama del proceso end-to-end
+├── entrada/                          # Generada en runtime junto al .exe (ignorada por git): el Formato_Dinamico.xlsm editable
 ├── salida/                           # Generada en runtime (ignorada por git)
 ├── requirements.txt
 ├── README.md                         # Documentación exhaustiva (≈370 líneas)
-└── .gitignore                        # Ignora salida/, .venv/, __pycache__, .vscode/, .idea/, .DS_Store
+└── .gitignore                        # Ignora salida/, entrada/, .venv/, __pycache__, .vscode/, .idea/, .DS_Store
 ```
 
-Nota: la carpeta `salida/` está en `.gitignore` y se crea en runtime cuando se extraen .txt o se genera el reporte SOX.
+Nota: las carpetas `salida/` y `entrada/` están en `.gitignore` y se crean en runtime. `salida/` recibe los .txt y reportes generados. `entrada/` es donde el usuario deja el `Formato_Dinamico.xlsm` (input del proceso): se llama `entrada/` — no `resources/` — para no confundirla con la `resources/` interna del proyecto (logo, factory default, grabaciones VBS). En el primer arranque `paths.asegurar_formato_dinamico()` copia el factory default desde `resources/` a `entrada/` si esta no tiene ningún `.xlsm`.
 
 ## 3.5. Branding corporativo — `src/branding.py`
 
@@ -136,6 +141,7 @@ Ventana principal (620x480, no redimensionable, título "Gestión de Activos Fij
 
 ### Comportamiento del botón "Extraer"
 
+- **Validación previa `entrada/` (bloqueante):** antes de leer, `validar_entrada_unica()` verifica que haya **uno y solo un** `.xlsm` en `entrada/`. Si hay 2 o más, se muestra un `messagebox.showwarning` con `MENSAJE_ENTRADA_MULTIPLE` y **se aborta** la extracción (no se puede continuar hasta que quede un solo archivo). El archivo a leer se resuelve dinámicamente con `formato_dinamico_path()` (prefiere el nombre canónico `Formato_Dinamico.xlsm`, si no el primer `.xlsm` alfabético).
 - Si existe(n) `LSMW_*.txt` previos → diálogo SÍ/NO `messagebox.askyesno`. SÍ borra todos los previos y genera uno nuevo; NO conserva.
 - Sin previos → genera directamente `LSMW_YYYYMMDD_HHMMSS.txt`.
 - Validaciones manejadas explícitamente: `FileNotFoundError` (Excel ausente), `ValueError` (hoja ausente), `Exception` (genérica del export), y red de seguridad que muestra traceback completo.
@@ -342,7 +348,7 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 - Celdas vacías referenciadas pueden aparecer como `0`.
 - 51 columnas exportadas — algunos campos: `ANLKL` (clase de activo), `BUKRS` (sociedad), `TXT50` (denominación), `KOSTL` (centro de costo), `WERKS` (centro), `EAUFN` (orden de inversión), `POSNR` (elemento PEP), `ORD41`–`ORD44` y `GDLGRP` (criterios de clasificación 1–5).
 
-## 8. Pruebas — 334 tests con `unittest`
+## 8. Pruebas — 361 tests con `unittest`
 
 ### Estrategia de mocking SAP
 - `MockSAPSession` registra cada llamada `findById(...).method()` en `session.actions` como tuplas `(sap_id, method, *args)`.
@@ -356,8 +362,9 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 - `patch.multiple("sap_upload", ...)` inyecta mocks; se guardan en `self.mocks`.
 
 ### Distribución
-- `tests/test_main.py` (99): handlers GUI, extracción TSV, vista SOX como frame embebido (`ControlSoxDialogTest` incluye `test_date_entries_do_not_use_key_validation` — regresión del bug del calendario donde `validate="key"` rompía el `_select` del popup), `FooterCopyrightTest` (3 tests: año actual, estilo discreto, packed `side="bottom"`), `CerrarSplashTest` (no-op silencioso de `_cerrar_splash` en dev mode), `GenerarReporteSoxHandlerTest` (deshabilitado de Generar+Atrás durante worker).
-- `tests/test_paths.py` (7): helpers de modo dev/bundled (PyInstaller). `ProjectRootTest` (`sys.frozen` vs dev), `BundledResourcePathTest` (lectura de `sys._MEIPASS`), `AsegurarFormatoDinamicoTest` (factory default del Formato_Dinamico_: primer arranque copia, segundo preserva ediciones, bundle ausente devuelve path sin crashear).
+- `tests/test_main.py` (100): handlers GUI, extracción TSV (incluye `test_warns_and_aborts_when_multiple_xlsm_in_entrada` — advertencia bloqueante ante múltiples `.xlsm` en `entrada/`), vista SOX como frame embebido (`ControlSoxDialogTest` incluye `test_date_entries_do_not_use_key_validation` — regresión del bug del calendario donde `validate="key"` rompía el `_select` del popup), `FooterCopyrightTest` (3 tests: año actual, estilo discreto, packed `side="bottom"`), `CerrarSplashTest` (no-op silencioso de `_cerrar_splash` en dev mode), `GenerarReporteSoxHandlerTest` (deshabilitado de Generar+Atrás durante worker).
+- `tests/test_paths.py` (18): helpers de modo dev/bundled (PyInstaller). `ProjectRootTest` (`sys.frozen` vs dev), `BundledResourcePathTest` (lectura de `sys._MEIPASS`), `ListarXlsmEntradaTest` (glob de `.xlsm` en `entrada/`, ignora otras extensiones), `FormatoDinamicoPathTest` (resolución: prefiere canónico, si no el primero, si vacío devuelve canónico), `ValidarEntradaUnicaTest` (0/1 ok, ≥2 advierte con `MENSAJE_ENTRADA_MULTIPLE`), `AsegurarFormatoDinamicoTest` (factory default `Formato_Dinamico.xlsm`: primer arranque copia, segundo preserva ediciones, no copia si el usuario dejó un `.xlsm` con otro nombre, bundle ausente devuelve path sin crashear).
+- `tests/test_branding.py` (15): paleta corporativa Hub de ISA, `cargar_logo` (escalado por aspect ratio, referencias persistentes), `aplicar_estilo_primario`/`aplicar_estilo_terciario`.
 - `tests/test_sox_report.py` (105): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso Población) + `PatronAfRegexTest` (6 tests del parseo de col D) + `GenerarHojaCreadosTest` (16 tests del paso post-procesamiento: filter, parsing, estructura, K y L como fórmulas =MID/=IF, replace idempotente, errores) + `EjecutarReporteTest` (2 tests del split de F8) + `GenerarHojaIpeTest` (8 tests de la hoja de evidencias: crear, embedding, soft-fail, replace, scaling) + `GenerarReporteSoxTest` (verifica orden de las 7 etapas incluyendo screenshots, paso a las funciones, `EXPORT_METHOD=None` salta Población/Creados/IPE).
 - `tests/test_sap_upload.py` (46): cada paso del flujo LSMW + `MainEntryPointTest`.
 - `tests/test_extraer_activos_creados.py` (48): cada paso del flujo SM35P + post-procesamiento del .xlsx.
@@ -431,3 +438,6 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 - **`ingresar_parametros` y `ejecutar_reporte` están separadas** — split necesario para capturar el screenshot del estado del formulario ANTES de F8. Antes era una sola función con `_log("Paso 2/4")` + F8 al final.
 - **Columna K usa `number_format="@"` como refuerzo declarativo** — `MID` siempre devuelve texto, así que el formato es redundante para el valor evaluado. Pero asegura que si alguien sobrescribe la fórmula con un valor pegado (ej. "08"), Excel siga interpretándolo como texto y no convierta a 8.
 - **`generar_hoja_creados` usa openpyxl puro (no pandas)** — para no añadir una dependencia pesada (~50 MB) por una sola función. Para 500k filas en normal mode toma ~30-60 segundos pero es aceptable como paso síncrono del worker. Si la performance se vuelve un problema, evaluar `read_only=True` para la lectura + dos pasadas (read en read_only, write en normal); o añadir pandas como dependencia opcional.
+- **Carpeta externa `entrada/` (no `resources/`) para el input del usuario** — el `Formato_Dinamico.xlsm` editable vive en `<EXE_DIR>/entrada/`, separada de la `resources/` interna del proyecto (logo, factory default, VBS) que se bundlea read-only. Sin esta separación el usuario veía dos carpetas conceptualmente distintas llamadas `resources` (la del repo/bundle vs. la externa editable) y era confuso. El factory default sigue viviendo en `resources/` y se copia a `entrada/` en el primer arranque.
+- **El input es `.xlsm` (con macros), no `.xlsx`** — el nombre canónico es `Formato_Dinamico.xlsm` (constante `FORMATO_DINAMICO_NOMBRE`). openpyxl lee `.xlsm` sin problema con `load_workbook(..., data_only=True)` (emite un `UserWarning` inofensivo sobre "Data Validation extension"). El nombre no es configurable desde la UI.
+- **Regla "un y solo un `.xlsm` en `entrada/`" bloqueante** — con 2+ archivos la elección del que se lee es ambigua, así que `validar_entrada_unica()` corre ANTES de leer y, si hay conflicto, muestra `MENSAJE_ENTRADA_MULTIPLE` y **aborta** la extracción (no advierte-y-sigue: no deja continuar hasta que quede un solo archivo). Además `asegurar_formato_dinamico()` no copia el factory default si ya hay algún `.xlsm` (aunque esté renombrado), para no auto-provocar el conflicto. La resolución (`formato_dinamico_path()`) y la validación son **dinámicas** (se evalúan en cada click de Extraer, no en el import de `main.py`), así el usuario puede corregir la carpeta sin reiniciar la app.

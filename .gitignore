@@ -7,7 +7,10 @@ venv/
 .env
 
 # Output generado por la app
-
+salida
+# Carpeta externa/editable creada en runtime junto al .exe (factory default
+# del Formato_Dinamico.xlsm). El master vive en resources/, no acá.
+entrada
 
 # macOS
 .DS_Store
@@ -15,7 +18,6 @@ venv/
 # IDE
 .vscode/
 .idea/
-salida
 
 # Artefactos de PyInstaller (build del .exe)
 build/
