@@ -543,12 +543,20 @@ def _subir_anexos_handler(
     root: tk.Tk,
     sociedad: str,
     archivos: list[Path],
+    activos_usuario: list[tuple[int, int]] | None,
+    nombre_archivo_usuario: str | None,
     status_var: tk.StringVar,
     button: tk.Widget,
     btn_atras: tk.Widget,
 ) -> None:
     """Valida la sociedad + archivos y lanza el worker que ejecuta el
-    flujo de subida de anexos a cada activo de la hoja Activos Fijos.
+    flujo de subida de anexos a cada activo.
+
+    La lista de activos depende de si el usuario cargó un `.xlsx` propio:
+      - `activos_usuario` no None → se usan esos activos (override).
+      - `activos_usuario` None → se usa el último `ActivosCreados_*.xlsx`
+        de `salida/` (comportamiento por defecto de "Extraer Activos
+        Creados").
 
     Patrón consistente con `_extraer_activos_creados_handler`:
       - Validaciones previas (sociedad en la lista, al menos un archivo).
@@ -581,11 +589,21 @@ def _subir_anexos_handler(
         )
         return
 
+    if activos_usuario is not None:
+        origen_desc = (
+            f"los {len(activos_usuario)} activo(s) del archivo "
+            f"'{nombre_archivo_usuario}'"
+        )
+    else:
+        origen_desc = (
+            "los activos de la hoja 'Activos Fijos' del último "
+            "ActivosCreados_*.xlsx en salida/"
+        )
+
     if not messagebox.askyesno(
         "Confirmar subida de anexos",
-        f"Se subirán {len(archivos)} archivo(s) como adjuntos a CADA "
-        f"activo fijo de la hoja 'Activos Fijos' del último "
-        f"ActivosCreados_*.xlsx en salida/.\n\n"
+        f"Se subirán {len(archivos)} archivo(s) como adjuntos a CADA uno de "
+        f"{origen_desc}.\n\n"
         f"  • Sociedad: {sociedad_norm}\n"
         f"  • Archivos: {len(archivos)}\n\n"
         f"Esto puede tomar varios minutos dependiendo del número de "
@@ -641,6 +659,7 @@ def _subir_anexos_handler(
                         session,
                         sociedad_norm,
                         archivos,
+                        activos=activos_usuario,
                         progress_callback=progress_callback,
                     )
 
@@ -1124,6 +1143,82 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     )
     sociedad_combo.grid(row=0, column=1, padx=4, pady=8, sticky="w")
 
+    # --- Archivo de activos existentes (OPCIONAL) ---
+    # Si el usuario carga un .xlsx válido (Activo Fijo, Subnúmero), esos
+    # activos reemplazan a los de "Extraer Activos Creados". La lista se
+    # valida y se parsea AL SELECCIONAR (no al subir); acá se guarda ya
+    # resuelta en `estado_usuario`.
+    estado_usuario: dict = {"activos": None, "nombre": None}
+
+    tk.Label(
+        form, text="Archivo activos:", anchor="e", width=10,
+        bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
+        font=("Helvetica", 10),
+    ).grid(row=1, column=0, padx=4, pady=(8, 0), sticky="e")
+
+    archivo_btns = tk.Frame(form, bg=branding.ISA_BLANCO)
+    archivo_btns.grid(row=1, column=1, padx=4, pady=(8, 0), sticky="w")
+
+    btn_sel_activos = branding.RoundedButton(
+        archivo_btns, text="Seleccionar .xlsx", style="tertiary",
+        padx=10, pady=3, font=("Helvetica", 9),
+    )
+    btn_sel_activos.grid(row=0, column=0, padx=(0, 4))
+
+    btn_quitar_activos = branding.RoundedButton(
+        archivo_btns, text="Quitar", style="tertiary",
+        padx=10, pady=3, font=("Helvetica", 9),
+    )
+    btn_quitar_activos.grid(row=0, column=1)
+
+    archivo_activos_status = tk.Label(
+        form, text="Ninguno — se usarán los activos extraídos",
+        anchor="w", bg=branding.ISA_BLANCO, fg=branding.ISA_GRIS,
+        font=("Helvetica", 9),
+    )
+    archivo_activos_status.grid(
+        row=2, column=1, padx=4, pady=(2, 4), sticky="w"
+    )
+
+    def _seleccionar_archivo_activos() -> None:
+        p_str = filedialog.askopenfilename(
+            title="Seleccionar archivo .xlsx de activos existentes",
+            filetypes=[("Excel .xlsx", "*.xlsx")],
+        )
+        if not p_str:
+            return
+        p = Path(p_str)
+        try:
+            from subir_anexos import validar_y_leer_activos_usuario
+        except ImportError as exc:
+            messagebox.showerror(
+                "Error de import",
+                f"No se pudo importar subir_anexos:\n{exc}",
+            )
+            return
+        try:
+            activos = validar_y_leer_activos_usuario(p)
+        except ValueError as exc:
+            messagebox.showwarning("Archivo de activos inválido", str(exc))
+            return
+        estado_usuario["activos"] = activos
+        estado_usuario["nombre"] = p.name
+        archivo_activos_status.config(
+            text=f"{p.name} — {len(activos)} activo(s)",
+            fg=branding.ISA_VERDE_OK,
+        )
+
+    def _quitar_archivo_activos() -> None:
+        estado_usuario["activos"] = None
+        estado_usuario["nombre"] = None
+        archivo_activos_status.config(
+            text="Ninguno — se usarán los activos extraídos",
+            fg=branding.ISA_GRIS,
+        )
+
+    btn_sel_activos.config(command=_seleccionar_archivo_activos)
+    btn_quitar_activos.config(command=_quitar_archivo_activos)
+
     # --- File picker + listbox ---
     archivos_seleccionados: list[Path] = []
 
@@ -1197,6 +1292,8 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
             root,
             sociedad_var.get(),
             list(archivos_seleccionados),
+            estado_usuario["activos"],
+            estado_usuario["nombre"],
             status_var,
             btn_subir,
             btn_atras,

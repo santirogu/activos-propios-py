@@ -131,23 +131,25 @@ python src/extraer_activos_creados.py 1017209574
 
 #### "Subir Anexos"
 
-Cuarto botón. Abre una sub-vista que permite adjuntar uno o varios archivos a CADA activo fijo de la hoja `Activos Fijos` del último `ActivosCreados_*.xlsx`. El form contiene:
+Cuarto botón. Abre una sub-vista que permite adjuntar uno o varios archivos a CADA activo fijo. Por defecto la lista de activos sale del último `ActivosCreados_*.xlsx` (de "Extraer Activos Creados"), pero el usuario puede **subir su propio `.xlsx` de activos existentes** para reemplazarla. El form contiene:
 
 - **Sociedad** (Combobox readonly con `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP`).
-- **Seleccionar archivos** — abre el diálogo nativo de Windows para elegir 1+ archivos.
+- **Archivo activos (opcional)** — `[Seleccionar .xlsx]` + `[Quitar]` + label de estado. Permite cargar un `.xlsx` con los activos a los que adjuntar. Estructura exigida: **extensión `.xlsx` exclusivamente**, **una sola hoja**, **fila de encabezado obligatoria** y **exactamente 2 columnas** (Activo Fijo, Subnúmero). Se **valida al seleccionar**: si cumple, muestra `nombre.xlsx — N activo(s)`; si no, una advertencia clara y corta para corregir. Con `[Quitar]` se vuelve al comportamiento por defecto.
+- **Seleccionar archivos** — abre el diálogo nativo de Windows para elegir 1+ anexos.
 - **Quitar seleccionado** — borra el archivo seleccionado de la lista.
-- **Listbox** mostrando los archivos a subir.
+- **Listbox** mostrando los anexos a subir.
 - **Subir Anexos a SAP** — dispara el flujo.
 
 Al pulsar Subir Anexos a SAP:
 1. Valida sociedad + al menos un archivo.
-2. Pide confirmación con `N archivos × M activos` total.
-3. Para cada par `(activo, subnúmero)` × cada archivo, ejecuta en SAP (vía AS02 + GOS PCATTA_CREA):
+2. **Origen de activos**: si se cargó un `.xlsx` válido, se usan esos activos; si no, los del último `ActivosCreados_*.xlsx`.
+3. Pide confirmación con `N archivos × M activos` total.
+4. Para cada par `(activo, subnúmero)` × cada archivo, ejecuta en SAP (vía AS02 + GOS PCATTA_CREA):
    - Abre AS02 con `ANLN1`, `ANLN2`, `BUKRS`.
    - Abre el menú "Servicios para Objeto" → "Crear adjunto".
    - Inyecta el path absoluto del archivo y confirma la cascada de diálogos.
-4. **Soft-fail por iteración**: si un activo no existe o el archivo es rechazado, se loguea y se sigue con el siguiente. Al final se muestra resumen `X OK / Y fallos`.
-5. Status label muestra `Subiendo N/total: activo X-Y, archivo foo.pdf` durante el proceso.
+5. **Soft-fail por iteración**: si un activo no existe o el archivo es rechazado, se loguea y se sigue con el siguiente. Al final se muestra resumen `X OK / Y fallos`.
+6. Status label muestra `Subiendo N/total: activo X-Y, archivo foo.pdf` durante el proceso.
 
 Lento: cada attachment ~5-10s (depende del SAP). 50 activos × 3 archivos ≈ 15-25 minutos. NO interactuar con SAP durante el proceso.
 
@@ -260,7 +262,7 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **361 pruebas** distribuidas en siete archivos:
+La suite contiene **373 pruebas** distribuidas en siete archivos:
 
 #### `tests/test_main.py` (100 pruebas)
 
@@ -511,7 +513,7 @@ No sirve para entregar al usuario final.
 │   ├── test_sap_upload.py           # 46 pruebas: flujo LSMW completo
 │   ├── test_sox_report.py           # 105 pruebas: validaciones + flujo SOX + Población + Creados + IPE
 │   ├── test_extraer_activos_creados.py  # 48 pruebas
-│   └── test_subir_anexos.py         # 29 pruebas
+│   └── test_subir_anexos.py         # 41 pruebas: flujo AS02+GOS + orquestador + validación del .xlsx del usuario
 ├── resources/                       # Recursos internos del proyecto (bundleados read-only en el .exe)
 │   ├── Formato_Dinamico.xlsm        # Formato maestro (.xlsm con macros): factory default con catálogos y plantilla
 │   ├── logo_hub_isa.png             # Logo Hub de ISA (bundled, read-only en el .exe)

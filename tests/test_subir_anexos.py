@@ -35,6 +35,7 @@ from subir_anexos import (  # noqa: E402
     get_archivo_activos_mas_reciente,
     leer_activos_del_excel,
     subir_anexos as orquestador,
+    validar_y_leer_activos_usuario,
 )
 from extraer_activos_creados import ACTIVOS_FIJOS_SHEET_NAME
 
@@ -491,6 +492,138 @@ class SubirAnexosTest(unittest.TestCase):
 
         # Aunque el callback falla, los attachments sí se ejecutan.
         self.assertEqual(stats["exitosos"], 2)
+
+    def test_activos_override_takes_priority_over_files(self):
+        """Con `activos=` explícito NO se lee ningún archivo de salida/:
+        se usan los pares provistos (ej. el .xlsx que el usuario subió)."""
+        activos = [(9001, 0), (9002, 3), (9003, 0)]
+        with patch(
+            "subir_anexos.get_archivo_activos_mas_reciente",
+            side_effect=AssertionError("no debe leer salida/"),
+        ), patch(
+            "subir_anexos.leer_activos_del_excel",
+            side_effect=AssertionError("no debe leer archivo"),
+        ), patch("subir_anexos.adjuntar_archivo") as mock_adj:
+            stats = orquestador(
+                MagicMock(), "ISA", [self.archivo_a],
+                activos=activos,
+            )
+
+        # 3 activos × 1 archivo = 3 attachments.
+        self.assertEqual(mock_adj.call_count, 3)
+        self.assertEqual(stats["total_intentos"], 3)
+        self.assertEqual(stats["exitosos"], 3)
+
+    def test_raises_when_activos_override_empty(self):
+        with self.assertRaisesRegex(ValueError, "vac"):
+            orquestador(MagicMock(), "ISA", [self.archivo_a], activos=[])
+
+
+# ---------------------------------------------------------------------------
+# validar_y_leer_activos_usuario — .xlsx provisto por el usuario
+# ---------------------------------------------------------------------------
+
+
+class ValidarYLeerActivosUsuarioTest(unittest.TestCase):
+    """Valida la lectura/validación estricta del .xlsx que el usuario sube
+    con activos ya creados/existentes (Activo Fijo, Subnúmero)."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="test_usr_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _crear_xlsx(self, filas, nombre="activos.xlsx", hojas_extra=0):
+        """Crea un .xlsx con `filas` (lista de tuplas) en la hoja activa."""
+        path = self.tmpdir / nombre
+        wb = Workbook()
+        ws = wb.active
+        for fila in filas:
+            ws.append(fila)
+        for i in range(hojas_extra):
+            wb.create_sheet(f"extra{i}")
+        wb.save(path)
+        return path
+
+    def test_valid_file_returns_pairs(self):
+        path = self._crear_xlsx([
+            ("Activo Fijo", "Subnúmero"),
+            (8048124, 0),
+            (8048125, 1),
+        ])
+        self.assertEqual(
+            validar_y_leer_activos_usuario(path),
+            [(8048124, 0), (8048125, 1)],
+        )
+
+    def test_rejects_non_xlsx_extension(self):
+        # La extensión se valida ANTES de abrir; el archivo ni existe.
+        with self.assertRaisesRegex(ValueError, r"\.xlsx"):
+            validar_y_leer_activos_usuario(self.tmpdir / "activos.xls")
+
+    def test_rejects_multiple_sheets(self):
+        path = self._crear_xlsx(
+            [("Activo Fijo", "Subnúmero"), (1, 0)], hojas_extra=1,
+        )
+        with self.assertRaisesRegex(ValueError, "una sola hoja"):
+            validar_y_leer_activos_usuario(path)
+
+    def test_rejects_more_than_two_columns(self):
+        path = self._crear_xlsx([
+            ("Activo Fijo", "Subnúmero", "Extra"),
+            (8048124, 0, "x"),
+        ])
+        with self.assertRaisesRegex(ValueError, "2 columnas"):
+            validar_y_leer_activos_usuario(path)
+
+    def test_rejects_missing_header(self):
+        # Sin encabezado: la fila 1 ya son datos numéricos.
+        path = self._crear_xlsx([(8048124, 0), (8048125, 1)])
+        with self.assertRaisesRegex(ValueError, "encabezado"):
+            validar_y_leer_activos_usuario(path)
+
+    def test_rejects_non_numeric_data(self):
+        path = self._crear_xlsx([
+            ("Activo Fijo", "Subnúmero"),
+            (8048124, 0),
+            ("no-numero", 1),
+        ])
+        with self.assertRaisesRegex(ValueError, "Fila 3"):
+            validar_y_leer_activos_usuario(path)
+
+    def test_rejects_only_header_no_data(self):
+        path = self._crear_xlsx([("Activo Fijo", "Subnúmero")])
+        with self.assertRaisesRegex(ValueError, "debajo del encabezado"):
+            validar_y_leer_activos_usuario(path)
+
+    def test_accepts_numbers_as_text(self):
+        path = self._crear_xlsx([
+            ("Activo Fijo", "Subnúmero"),
+            ("8048124", "0"),
+        ])
+        self.assertEqual(
+            validar_y_leer_activos_usuario(path), [(8048124, 0)],
+        )
+
+    def test_accepts_integer_floats(self):
+        path = self._crear_xlsx([
+            ("Activo Fijo", "Subnúmero"),
+            (8048124.0, 0.0),
+        ])
+        self.assertEqual(
+            validar_y_leer_activos_usuario(path), [(8048124, 0)],
+        )
+
+    def test_ignores_trailing_empty_rows(self):
+        path = self._crear_xlsx([
+            ("Activo Fijo", "Subnúmero"),
+            (8048124, 0),
+            (None, None),
+        ])
+        self.assertEqual(
+            validar_y_leer_activos_usuario(path), [(8048124, 0)],
+        )
 
 
 # ---------------------------------------------------------------------------

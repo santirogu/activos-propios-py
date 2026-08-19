@@ -204,6 +204,148 @@ def leer_activos_del_excel(archivo_path: Path) -> list[tuple[int, int]]:
 
 
 # ---------------------------------------------------------------------------
+# Lectura + validación del .xlsx provisto por el usuario (activos existentes)
+# ---------------------------------------------------------------------------
+
+# El usuario puede subir su propio archivo de activos ya creados/existentes
+# en vez de usar el `ActivosCreados_*.xlsx` generado por "Extraer Activos
+# Creados". Estructura EXIGIDA (validada al seleccionar en la GUI):
+#   - Extensión exclusivamente `.xlsx`.
+#   - Una sola hoja.
+#   - Fila 1 = encabezado (2 celdas de texto).
+#   - Datos desde la fila 2: 2 columnas numéricas (Activo Fijo, Subnúmero).
+#   - Al menos una fila de datos.
+ARCHIVO_USUARIO_EXTENSION = ".xlsx"
+ARCHIVO_USUARIO_HEADERS = ("Activo Fijo", "Subnúmero")
+
+
+def _celda_vacia(v) -> bool:
+    """True si la celda está vacía (None o string en blanco)."""
+    return v is None or (isinstance(v, str) and v.strip() == "")
+
+
+def _ancho_fila(row: tuple) -> int:
+    """Índice (1-based) de la última columna con contenido en la fila."""
+    ancho = 0
+    for i, celda in enumerate(row):
+        if not _celda_vacia(celda):
+            ancho = i + 1
+    return ancho
+
+
+def _a_entero(v) -> int:
+    """Convierte a `int` un valor que puede venir como int, float entero o
+    string numérico. Lanza `ValueError` si no es convertible a entero.
+    """
+    if isinstance(v, bool):  # bool es subclase de int; no lo aceptamos
+        raise ValueError("valor booleano no válido")
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        if v.is_integer():
+            return int(v)
+        raise ValueError(f"{v!r} no es un entero")
+    if isinstance(v, str):
+        s = v.strip()
+        if s == "":
+            raise ValueError("celda vacía")
+        return int(s)  # lanza ValueError si no es un entero en texto
+    raise ValueError(f"tipo no soportado: {type(v).__name__}")
+
+
+def _parece_encabezado(v) -> bool:
+    """True si la celda luce como encabezado: texto NO numérico y no vacío."""
+    if _celda_vacia(v) or isinstance(v, (int, float)):
+        return False
+    try:
+        _a_entero(v)
+        return False  # es un número escrito como texto → no es encabezado
+    except ValueError:
+        return True
+
+
+def validar_y_leer_activos_usuario(archivo_path: Path) -> list[tuple[int, int]]:
+    """Valida el `.xlsx` provisto por el usuario con activos existentes y
+    devuelve la lista de pares `(activo_fijo, subnúmero)` como ints.
+
+    La validación es estricta (ver estructura exigida arriba) y produce
+    mensajes claros y cortos aptos para mostrar directo en un `messagebox`.
+
+    Raises:
+        ValueError: con mensaje accionable si el archivo no cumple alguna
+            de las condiciones (extensión, nº de hojas, columnas,
+            encabezado, datos numéricos, filas vacías).
+    """
+    # 1. Extensión (antes que nada — no dependemos de que el archivo exista).
+    if archivo_path.suffix.lower() != ARCHIVO_USUARIO_EXTENSION:
+        raise ValueError("El archivo debe tener extensión .xlsx.")
+
+    # 2. Existencia.
+    if not archivo_path.exists():
+        raise ValueError(f"No existe el archivo: {archivo_path.name}")
+
+    # 3. Apertura como workbook.
+    try:
+        wb = load_workbook(archivo_path, data_only=True)
+    except Exception as exc:  # openpyxl lanza tipos variados ante corrupción
+        raise ValueError(
+            "No se pudo abrir el archivo como Excel .xlsx. "
+            "Verifica que no esté dañado."
+        ) from exc
+
+    # 4. Una sola hoja (estricto).
+    if len(wb.sheetnames) != 1:
+        raise ValueError(
+            f"El archivo debe tener una sola hoja (tiene {len(wb.sheetnames)})."
+        )
+
+    ws = wb[wb.sheetnames[0]]
+
+    # Filas con contenido (descartamos filas totalmente vacías).
+    filas = [
+        row for row in ws.iter_rows(values_only=True)
+        if any(not _celda_vacia(c) for c in row)
+    ]
+    if not filas:
+        raise ValueError("El archivo está vacío.")
+
+    # 5. Exactamente 2 columnas con datos.
+    max_ancho = max(_ancho_fila(row) for row in filas)
+    if max_ancho != 2:
+        raise ValueError(
+            f"El archivo debe tener exactamente 2 columnas "
+            f"(Activo Fijo, Subnúmero); se detectaron {max_ancho}."
+        )
+
+    # 6. Fila 1 = encabezado (ambas celdas texto no numérico).
+    header = filas[0]
+    if not (_parece_encabezado(header[0]) and _parece_encabezado(header[1])):
+        raise ValueError(
+            "El archivo debe incluir una fila de encabezado con los nombres "
+            "de las columnas (Activo Fijo, Subnúmero)."
+        )
+
+    # 7. Datos desde la fila 2.
+    datos = filas[1:]
+    if not datos:
+        raise ValueError(
+            "El archivo no tiene filas de activos debajo del encabezado."
+        )
+
+    pares: list[tuple[int, int]] = []
+    for nro_fila, row in enumerate(datos, start=2):  # start=2 → nº fila Excel
+        activo_raw, sub_raw = row[0], row[1]
+        try:
+            pares.append((_a_entero(activo_raw), _a_entero(sub_raw)))
+        except ValueError:
+            raise ValueError(
+                f"Fila {nro_fila}: 'Activo Fijo' y 'Subnúmero' deben ser "
+                f"numéricos (se encontró: {activo_raw!r}, {sub_raw!r})."
+            )
+    return pares
+
+
+# ---------------------------------------------------------------------------
 # FLUJO SAP — Adjuntar UN archivo a UN activo
 # ---------------------------------------------------------------------------
 
@@ -350,10 +492,16 @@ def subir_anexos(
     sociedad: str,
     archivos: list[Path],
     archivo_activos: Path | None = None,
+    activos: list[tuple[int, int]] | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> dict:
-    """Adjunta cada archivo de `archivos` a cada par `(activo, subnúmero)`
-    leído de la hoja `Activos Fijos` del archivo `archivo_activos`.
+    """Adjunta cada archivo de `archivos` a cada par `(activo, subnúmero)`.
+
+    La lista de activos se resuelve por prioridad:
+      1. `activos` si se pasa directamente (ej. el `.xlsx` que el usuario
+         subió y ya fue validado por `validar_y_leer_activos_usuario`).
+      2. la hoja `Activos Fijos` de `archivo_activos` si se pasa.
+      3. el `ActivosCreados_*.xlsx` más reciente en `salida/` (default).
 
     **Soft-fail por iteración**: si una combinación `(activo, archivo)`
     falla en SAP, se loguea y se continúa con la siguiente. El total de
@@ -364,7 +512,10 @@ def subir_anexos(
         sociedad: código de sociedad (validado contra `VALID_SOCIEDADES`).
         archivos: lista de Paths absolutos a los archivos a subir.
         archivo_activos: ruta al `ActivosCreados_*.xlsx` con la hoja
-            `Activos Fijos`. Si None, se usa el más reciente en `salida/`.
+            `Activos Fijos`. Si None (y `activos` tampoco viene), se usa
+            el más reciente en `salida/`.
+        activos: lista de pares `(activo, subnúmero)` ya resuelta. Si se
+            pasa, tiene prioridad y NO se lee ningún archivo de `salida/`.
         progress_callback: opcional. Si se pasa, se llama con
             `(intento_actual, total_intentos, descripcion)` antes de
             cada attachment — útil para que el handler GUI actualice
@@ -379,8 +530,8 @@ def subir_anexos(
             `(activo, subnúmero, archivo_path, mensaje_error)`.
 
     Raises:
-        ValueError: si `sociedad` inválida, o si `Activos Fijos` no
-            existe o está vacía.
+        ValueError: si `sociedad` inválida, `archivos` vacío, o si la
+            lista de activos resuelta está vacía.
         FileNotFoundError: si no hay archivos `ActivosCreados_*.xlsx`.
     """
     sociedad_norm = validar_sociedad(sociedad)
@@ -390,14 +541,17 @@ def subir_anexos(
             "Debes seleccionar al menos un archivo a adjuntar."
         )
 
-    if archivo_activos is None:
-        archivo_activos = get_archivo_activos_mas_reciente()
-    activos = leer_activos_del_excel(archivo_activos)
-    if not activos:
-        raise ValueError(
-            f"El archivo {archivo_activos.name} tiene la hoja "
-            f"'{ACTIVOS_FIJOS_SHEET_NAME}' pero sin filas de datos."
-        )
+    if activos is None:
+        if archivo_activos is None:
+            archivo_activos = get_archivo_activos_mas_reciente()
+        activos = leer_activos_del_excel(archivo_activos)
+        if not activos:
+            raise ValueError(
+                f"El archivo {archivo_activos.name} tiene la hoja "
+                f"'{ACTIVOS_FIJOS_SHEET_NAME}' pero sin filas de datos."
+            )
+    elif not activos:
+        raise ValueError("La lista de activos proporcionada está vacía.")
 
     total = len(activos) * len(archivos)
     _log(
