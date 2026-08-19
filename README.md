@@ -134,10 +134,8 @@ python src/extraer_activos_creados.py 1017209574
 Cuarto botón. Abre una sub-vista que permite adjuntar uno o varios archivos a CADA activo fijo. Por defecto la lista de activos sale del último `ActivosCreados_*.xlsx` (de "Extraer Activos Creados"), pero el usuario puede **subir su propio `.xlsx` de activos existentes** para reemplazarla. El form contiene:
 
 - **Sociedad** (Combobox readonly con `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP`).
-- **Archivo activos (opcional)** — `[Seleccionar .xlsx]` + `[Quitar]` + label de estado. Permite cargar un `.xlsx` con los activos a los que adjuntar. Estructura exigida: **extensión `.xlsx` exclusivamente**, **una sola hoja**, **fila de encabezado obligatoria** y **exactamente 2 columnas** (Activo Fijo, Subnúmero). Se **valida al seleccionar**: si cumple, muestra `nombre.xlsx — N activo(s)`; si no, una advertencia clara y corta para corregir. Con `[Quitar]` se vuelve al comportamiento por defecto.
-- **Seleccionar archivos** — abre el diálogo nativo de Windows para elegir 1+ anexos.
-- **Quitar seleccionado** — borra el archivo seleccionado de la lista.
-- **Listbox** mostrando los anexos a subir.
+- **Lista de activos (opcional)** — sección con `[Cargar .xlsx]` + `[Quitar]` + label de estado. Permite cargar un `.xlsx` con los activos a los que adjuntar. Estructura exigida: **extensión `.xlsx` exclusivamente**, **una sola hoja**, **fila de encabezado obligatoria** y **exactamente 2 columnas** (Activo Fijo, Subnúmero). Se **valida al seleccionar**: si cumple, muestra `nombre.xlsx — N activo(s)`; si no, una advertencia clara y corta para corregir. Con `[Quitar]` se vuelve al comportamiento por defecto.
+- **Anexos a subir** — sección con `Seleccionar archivos` (abre el diálogo nativo de Windows para elegir 1+ anexos), `Quitar seleccionado`, y un Listbox que muestra los anexos elegidos.
 - **Subir Anexos a SAP** — dispara el flujo.
 
 Al pulsar Subir Anexos a SAP:

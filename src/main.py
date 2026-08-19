@@ -1123,15 +1123,15 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     # gris — mismo lenguaje visual que las cards del menú.
     panel = _crear_panel_card(frame_anexos)
 
-    # --- Form: Sociedad ---
+    # --- Sociedad ---
     form = tk.Frame(panel, bg=branding.ISA_BLANCO)
-    form.pack(pady=(14, 6), padx=18)
+    form.pack(pady=(14, 4), padx=18)
 
     tk.Label(
         form, text="Sociedad:", anchor="e", width=10,
         bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
         font=("Helvetica", 10),
-    ).grid(row=0, column=0, padx=4, pady=8, sticky="e")
+    ).grid(row=0, column=0, padx=4, pady=6, sticky="e")
 
     sociedad_var = tk.StringVar()
     sociedad_combo = ttk.Combobox(
@@ -1141,44 +1141,46 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
         state="readonly",
         width=14,
     )
-    sociedad_combo.grid(row=0, column=1, padx=4, pady=8, sticky="w")
+    sociedad_combo.grid(row=0, column=1, padx=4, pady=6, sticky="w")
 
-    # --- Archivo de activos existentes (OPCIONAL) ---
+    # --- Sección "Lista de activos" (fuente OPCIONAL desde .xlsx) ---
     # Si el usuario carga un .xlsx válido (Activo Fijo, Subnúmero), esos
     # activos reemplazan a los de "Extraer Activos Creados". La lista se
     # valida y se parsea AL SELECCIONAR (no al subir); acá se guarda ya
-    # resuelta en `estado_usuario`.
+    # resuelta en `estado_usuario`. Va en su propia sección con título para
+    # no confundirla con el selector de anexos (más abajo).
     estado_usuario: dict = {"activos": None, "nombre": None}
 
-    tk.Label(
-        form, text="Archivo activos:", anchor="e", width=10,
-        bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
-        font=("Helvetica", 10),
-    ).grid(row=1, column=0, padx=4, pady=(8, 0), sticky="e")
+    sec_activos = tk.Frame(panel, bg=branding.ISA_BLANCO)
+    sec_activos.pack(pady=(6, 0), padx=18)
 
-    archivo_btns = tk.Frame(form, bg=branding.ISA_BLANCO)
-    archivo_btns.grid(row=1, column=1, padx=4, pady=(8, 0), sticky="w")
+    tk.Label(
+        sec_activos, text="Lista de activos (opcional)",
+        bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
+        font=("Helvetica", 10, "bold"),
+    ).pack(pady=(0, 3))
+
+    activos_btns = tk.Frame(sec_activos, bg=branding.ISA_BLANCO)
+    activos_btns.pack()
 
     btn_sel_activos = branding.RoundedButton(
-        archivo_btns, text="Seleccionar .xlsx", style="tertiary",
-        padx=10, pady=3, font=("Helvetica", 9),
+        activos_btns, text="Cargar .xlsx", style="tertiary",
+        padx=12, pady=4, font=("Helvetica", 10),
     )
-    btn_sel_activos.grid(row=0, column=0, padx=(0, 4))
+    btn_sel_activos.grid(row=0, column=0, padx=4)
 
     btn_quitar_activos = branding.RoundedButton(
-        archivo_btns, text="Quitar", style="tertiary",
-        padx=10, pady=3, font=("Helvetica", 9),
+        activos_btns, text="Quitar", style="tertiary",
+        padx=12, pady=4, font=("Helvetica", 10),
     )
-    btn_quitar_activos.grid(row=0, column=1)
+    btn_quitar_activos.grid(row=0, column=1, padx=4)
 
     archivo_activos_status = tk.Label(
-        form, text="Ninguno — se usarán los activos extraídos",
-        anchor="w", bg=branding.ISA_BLANCO, fg=branding.ISA_GRIS,
+        sec_activos, text="Ninguno — se usarán los activos extraídos",
+        bg=branding.ISA_BLANCO, fg=branding.ISA_GRIS,
         font=("Helvetica", 9),
     )
-    archivo_activos_status.grid(
-        row=2, column=1, padx=4, pady=(2, 4), sticky="w"
-    )
+    archivo_activos_status.pack(pady=(3, 0))
 
     def _seleccionar_archivo_activos() -> None:
         p_str = filedialog.askopenfilename(
@@ -1219,11 +1221,17 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     btn_sel_activos.config(command=_seleccionar_archivo_activos)
     btn_quitar_activos.config(command=_quitar_archivo_activos)
 
-    # --- File picker + listbox ---
+    # --- Sección "Anexos a subir" (los archivos a adjuntar) ---
     archivos_seleccionados: list[Path] = []
 
+    tk.Label(
+        panel, text="Anexos a subir",
+        bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
+        font=("Helvetica", 10, "bold"),
+    ).pack(pady=(12, 3), padx=18)
+
     archivos_frame = tk.Frame(panel, bg=branding.ISA_BLANCO)
-    archivos_frame.pack(pady=(6, 0), padx=18)
+    archivos_frame.pack(pady=(0, 0), padx=18)
 
     btn_seleccionar = branding.RoundedButton(
         archivos_frame,
@@ -1244,7 +1252,7 @@ def abrir_subir_anexos(root: tk.Tk, frame_activos: tk.Frame) -> tk.Frame:
     btn_quitar.grid(row=0, column=1, padx=4, sticky="w")
 
     archivos_listbox = tk.Listbox(
-        panel, height=6, width=58,
+        panel, height=5, width=58,
         font=("Helvetica", 9),
         selectmode="single",
         highlightthickness=0, bd=1, relief="solid",
