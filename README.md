@@ -167,7 +167,7 @@ La estructura intermedia permite añadir en el futuro más opciones HUB.PPE.XX s
 
 Reemplaza la vista del intermedio por un formulario embebido en la misma ventana (no abre un Toplevel separado). Arriba a la izquierda aparece un botón **"← Atrás"** que devuelve al intermedio. El formulario sirve para generar el **Reporte SOX** desde SAP:
 
-- **Sociedades (multiselect)** — una lista (`Listbox` con `selectmode="multiple"`) con las opciones: `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP, XM`. El usuario marca **una o varias** con un clic simple (no necesita Ctrl). Se genera **un reporte por cada sociedad seleccionada** (no un consolidado).
+- **Sociedades (multiselect)** — **checkboxes** en grilla de 2 columnas con las opciones: `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP, XM`, con la nota *"Selecciona 1 o más sociedades para generar el Reporte SOX"*. El usuario marca **una o varias**. Se genera **un reporte por cada sociedad seleccionada** (no un consolidado).
 - **Desde** / **Hasta** — campos con **calendario emergente** (`DateEntry` de `tkcalendar`). El usuario puede elegir la fecha del calendario o escribirla a mano. Aún en escritura manual, el `validatecommand` restringe a dígitos y puntos (máx 10 caracteres). Formato `dd.mm.aaaa`.
 
 Validaciones al presionar **"Generar Reporte SOX"**:
@@ -296,7 +296,7 @@ La suite contiene **378 pruebas** distribuidas en siete archivos:
 
 **`SubirASapFlagTest`** (5 pruebas) — gestión correcta del flag `_upload_en_curso`: True durante el worker, False tras éxito o error, no se setea si el usuario cancela, botón queda disabled si `salida/` queda vacía tras el upload.
 
-**`ControlSoxDialogTest`** (12 pruebas) — `control_sox(root, frame_menu)` oculta el menú y muestra un `frame_sox` embebido en `root` (no Toplevel). Expone un **Listbox multiselect** de sociedades (`selectmode="multiple"`, valores == `VALID_SOCIEDADES`, incluye `XM`) con el helper `sociedades_seleccionadas()`, StringVars del formulario, el botón "← Atrás" y verifica que al pulsarlo el `frame_sox` se destruye y el `frame_menu` vuelve a pack. Los campos Desde/Hasta son `DateEntry` (calendario emergente) que escriben en formato `dd.mm.aaaa` e inicializan con la fecha actual.
+**`ControlSoxDialogTest`** (12 pruebas) — `control_sox(root, frame_menu)` oculta el menú y muestra un `frame_sox` embebido en `root` (no Toplevel). Expone un **multiselect de sociedades por checkboxes** (`soc_vars`: un `BooleanVar` por sociedad, claves == `VALID_SOCIEDADES`, incluye `XM`, arrancan sin marcar) con el helper `sociedades_seleccionadas()`, StringVars del formulario, el botón "← Atrás" y verifica que al pulsarlo el `frame_sox` se destruye y el `frame_menu` vuelve a pack. Los campos Desde/Hasta son `DateEntry` (calendario emergente) que escriben en formato `dd.mm.aaaa` e inicializan con la fecha actual.
 
 **`GenerarReporteSoxHandlerTest`** (13 pruebas) — handler del botón "Generar Reporte SOX": validación (sin sociedad seleccionada, sociedad inválida, formato de fecha, rango fechas), cancelación, happy path con normalización, **multiselect** (un reporte por cada sociedad seleccionada, soft-fail que continúa con las demás ante un error), gestión del estado del botón Generar y del botón Atrás (ambos deshabilitados durante el worker, re-habilitados al final), y manejo de errores en el worker (SAP no disponible, flujo falla, contexto COM apartment).
 

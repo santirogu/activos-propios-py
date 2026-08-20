@@ -1486,11 +1486,11 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     form = tk.Frame(panel, bg=branding.ISA_BLANCO)
     form.pack(pady=(16, 12), padx=18)
 
-    # --- Sociedades (Listbox multiselect) ---
-    # Multiselect: el usuario marca 1 o varias sociedades y al Generar se
-    # corre el flujo SOX una vez por cada una (un reporte por sociedad, no
-    # consolidado). `selectmode="multiple"` toggle-a con un clic simple
-    # (sin necesidad de Ctrl/Shift).
+    # --- Sociedades (checkboxes multiselect) ---
+    # Multiselect con checkboxes en grilla de 2 columnas: el usuario marca 1
+    # o varias sociedades y al Generar se corre el flujo SOX una vez por cada
+    # una (un reporte por sociedad, no consolidado). Los checkboxes son más
+    # amigables que un Listbox con barras de selección.
     tk.Label(
         form, text="Sociedades:", anchor="e", width=10,
         bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
@@ -1499,28 +1499,36 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     sociedad_box = tk.Frame(form, bg=branding.ISA_BLANCO)
     sociedad_box.grid(row=0, column=1, padx=4, pady=6, sticky="w")
 
-    sociedad_listbox = tk.Listbox(
-        sociedad_box,
-        selectmode="multiple",
-        height=len(VALID_SOCIEDADES),
-        width=14,
-        exportselection=False,  # no perder la selección al enfocar otro widget
-        font=("Helvetica", 10),
-        highlightthickness=0, bd=1, relief="solid",
-        activestyle="none",
-    )
-    for soc in VALID_SOCIEDADES:
-        sociedad_listbox.insert("end", soc)
-    sociedad_listbox.pack()
+    checks_frame = tk.Frame(sociedad_box, bg=branding.ISA_BLANCO)
+    checks_frame.pack(anchor="w")
+
+    _NCOLS_SOC = 2
+    soc_vars: dict[str, tk.BooleanVar] = {}
+    for i, soc in enumerate(VALID_SOCIEDADES):
+        var = tk.BooleanVar(value=False)
+        soc_vars[soc] = var
+        cb = tk.Checkbutton(
+            checks_frame, text=soc, variable=var,
+            bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
+            activebackground=branding.ISA_BLANCO,
+            activeforeground=branding.ISA_AZUL,
+            selectcolor=branding.ISA_BLANCO,
+            font=("Helvetica", 10), anchor="w", width=7,
+            highlightthickness=0, bd=0, cursor="hand2", padx=2,
+        )
+        r, c = divmod(i, _NCOLS_SOC)
+        cb.grid(row=r, column=c, sticky="w", padx=(0, 10), pady=1)
 
     tk.Label(
-        sociedad_box, text="(puedes seleccionar varias)",
-        fg=branding.ISA_GRIS_CLARO, bg=branding.ISA_BLANCO,
-        font=("Helvetica", 8),
-    ).pack(anchor="w", pady=(2, 0))
+        sociedad_box,
+        text="Selecciona 1 o más sociedades para generar el Reporte SOX",
+        fg=branding.ISA_GRIS, bg=branding.ISA_BLANCO,
+        font=("Helvetica", 8), justify="left", wraplength=240,
+    ).pack(anchor="w", pady=(4, 0))
 
     def _sociedades_seleccionadas() -> list[str]:
-        return [sociedad_listbox.get(i) for i in sociedad_listbox.curselection()]
+        # Preserva el orden de VALID_SOCIEDADES.
+        return [soc for soc, var in soc_vars.items() if var.get()]
 
     # --- Fechas con calendario emergente (DateEntry de tkcalendar) ---
     # DateEntry abre un popup de calendario al hacer clic en la flecha.
@@ -1622,7 +1630,7 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     frame_sox.desde_var = desde_var
     frame_sox.hasta_var = hasta_var
     frame_sox.status_var = status_var
-    frame_sox.sociedad_listbox = sociedad_listbox
+    frame_sox.soc_vars = soc_vars
     frame_sox.sociedades_seleccionadas = _sociedades_seleccionadas
     frame_sox.desde_entry = desde_entry
     frame_sox.hasta_entry = hasta_entry

@@ -891,34 +891,37 @@ class ControlSoxDialogTest(unittest.TestCase):
         finally:
             frame_sox.destroy()
 
-    def test_frame_has_sociedad_listbox_with_valid_values(self) -> None:
+    def test_frame_has_sociedad_checkboxes_with_valid_values(self) -> None:
         frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
             from sox_report import VALID_SOCIEDADES
-            items = tuple(
-                frame_sox.sociedad_listbox.get(0, "end")
-            )
-            self.assertEqual(items, VALID_SOCIEDADES)
-        finally:
-            frame_sox.destroy()
-
-    def test_sociedad_listbox_is_multiselect(self) -> None:
-        frame_sox = main.control_sox(self.root, self.frame_menu)
-        try:
             self.assertEqual(
-                str(frame_sox.sociedad_listbox["selectmode"]), "multiple"
+                tuple(frame_sox.soc_vars.keys()), VALID_SOCIEDADES
             )
         finally:
             frame_sox.destroy()
 
-    def test_sociedades_seleccionadas_returns_marked_items(self) -> None:
-        """El helper expuesto devuelve la lista de sociedades marcadas."""
+    def test_sociedad_checkboxes_start_unchecked(self) -> None:
+        """Ninguna sociedad viene marcada por defecto."""
         frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            frame_sox.sociedad_listbox.selection_set(1)  # ISA
-            frame_sox.sociedad_listbox.selection_set(2)  # ITCH
+            self.assertEqual(frame_sox.sociedades_seleccionadas(), [])
+            self.assertTrue(
+                all(not v.get() for v in frame_sox.soc_vars.values())
+            )
+        finally:
+            frame_sox.destroy()
+
+    def test_sociedades_seleccionadas_returns_marked_items_in_order(self) -> None:
+        """El helper devuelve las sociedades marcadas, en el orden de la lista."""
+        frame_sox = main.control_sox(self.root, self.frame_menu)
+        try:
+            frame_sox.soc_vars["ITCH"].set(True)
+            frame_sox.soc_vars["ISA"].set(True)
+            frame_sox.soc_vars["XM"].set(True)
+            # Orden preservado según VALID_SOCIEDADES (ISA antes que ITCH).
             self.assertEqual(
-                frame_sox.sociedades_seleccionadas(), ["ISA", "ITCH"]
+                frame_sox.sociedades_seleccionadas(), ["ISA", "ITCH", "XM"]
             )
         finally:
             frame_sox.destroy()
@@ -926,7 +929,7 @@ class ControlSoxDialogTest(unittest.TestCase):
     def test_xm_is_in_sociedad_list(self) -> None:
         frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            self.assertIn("XM", frame_sox.sociedad_listbox.get(0, "end"))
+            self.assertIn("XM", frame_sox.soc_vars)
         finally:
             frame_sox.destroy()
 
