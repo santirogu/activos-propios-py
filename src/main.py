@@ -354,19 +354,24 @@ def subir_a_sap(root: tk.Tk, status_var: tk.StringVar, button: tk.Widget) -> Non
 
 def _generar_reporte_sox_handler(
     root: tk.Tk,
-    sociedad: str,
+    sociedades: list[str],
     fecha_desde: str,
     fecha_hasta: str,
     status_var: tk.StringVar,
     button: tk.Widget,
     btn_atras: tk.Widget,
 ) -> None:
-    """Valida los inputs y lanza el worker que genera el reporte SOX.
+    """Valida los inputs y lanza el worker que genera el reporte SOX para
+    CADA sociedad seleccionada (un reporte por sociedad, no consolidado).
 
     El form vive en `root` (no en un Toplevel); por eso usamos `root.after`
     para los callbacks thread-safe. Mientras el worker corre, deshabilita
     tanto el botón Generar como el botón Atrás (no queremos que el usuario
-    vuelva al menú a mitad de un flujo SAP)."""
+    vuelva al menú a mitad de un flujo SAP).
+
+    **Soft-fail por sociedad**: si el flujo falla para una sociedad, se
+    registra y se continúa con las demás; al final se muestra un resumen
+    `X OK / Y con error`."""
     try:
         from sox_report import validar_sociedad, validar_rango_fechas
     except ImportError as exc:
@@ -375,20 +380,29 @@ def _generar_reporte_sox_handler(
         )
         return
 
+    if not sociedades:
+        messagebox.showerror(
+            "Datos inválidos",
+            "Selecciona al menos una sociedad antes de generar el reporte.",
+        )
+        return
+
     try:
-        sociedad_norm = validar_sociedad(sociedad)
+        sociedades_norm = [validar_sociedad(s) for s in sociedades]
         validar_rango_fechas(fecha_desde, fecha_hasta)
     except ValueError as exc:
         messagebox.showerror("Datos inválidos", str(exc))
         return
 
+    lista_soc = ", ".join(sociedades_norm)
     if not messagebox.askyesno(
         "Confirmar generación del reporte SOX",
-        f"Se generará el reporte SOX para:\n"
-        f"  • Sociedad: {sociedad_norm}\n"
+        f"Se generará un reporte SOX por CADA sociedad seleccionada "
+        f"({len(sociedades_norm)}):\n"
+        f"  • Sociedades: {lista_soc}\n"
         f"  • Desde: {fecha_desde}\n"
         f"  • Hasta: {fecha_hasta}\n\n"
-        f"El archivo se guardará en salida/.\n\n"
+        f"Los archivos se guardarán en salida/ (uno por sociedad).\n\n"
         f"Asegúrate de tener SAP abierto y con sesión iniciada.\n\n"
         f"¿Continuar?",
     ):
@@ -427,23 +441,52 @@ def _generar_reporte_sox_handler(
                 try:
                     update_status("Conectando a la sesión SAP...")
                     session = get_sap_session()
-
-                    update_status(
-                        f"Generando reporte SOX para {sociedad_norm} "
-                        f"({fecha_desde} → {fecha_hasta})..."
-                    )
-                    carpeta, nombre = generar_reporte_sox(
-                        session, sociedad_norm, fecha_desde, fecha_hasta
-                    )
-
-                    update_status(f"Reporte generado: {nombre}")
-                    show_info(
-                        "Reporte SOX generado",
-                        f"Archivo guardado en:\n{carpeta}\\{nombre}",
-                    )
                 except Exception as exc:
                     update_status("")
                     show_error("Error generando reporte SOX", str(exc))
+                    return
+
+                total = len(sociedades_norm)
+                exitosos: list[str] = []
+                fallidos: list[tuple[str, str]] = []
+                for idx, soc in enumerate(sociedades_norm, start=1):
+                    update_status(
+                        f"Generando {idx}/{total}: {soc} "
+                        f"({fecha_desde} → {fecha_hasta})..."
+                    )
+                    try:
+                        carpeta, nombre = generar_reporte_sox(
+                            session, soc, fecha_desde, fecha_hasta
+                        )
+                        exitosos.append(nombre)
+                        _log(f"SOX OK ({idx}/{total}): {soc} → {nombre}")
+                    except Exception as exc:
+                        fallidos.append((soc, str(exc)))
+                        _log(f"SOX FALLO ({idx}/{total}): {soc} — {exc!r}")
+
+                update_status(
+                    f"Finalizado: {len(exitosos)} OK, {len(fallidos)} con error"
+                )
+
+                resumen = (
+                    f"Generación finalizada.\n\n"
+                    f"  • Reportes OK: {len(exitosos)} / {total}\n"
+                    f"  • Con error: {len(fallidos)}\n"
+                )
+                if exitosos:
+                    resumen += "\nGenerados en salida/:\n"
+                    for nombre in exitosos:
+                        resumen += f"  • {nombre}\n"
+                if fallidos:
+                    resumen += "\nCon error:\n"
+                    for soc, err in fallidos:
+                        err_corto = err if len(err) <= 180 else err[:180] + "…"
+                        resumen += f"  • {soc}: {err_corto}\n"
+
+                if fallidos:
+                    show_error("Reporte SOX con errores", resumen)
+                else:
+                    show_info("Reporte SOX generado", resumen)
             finally:
                 reenable()
 
@@ -1443,20 +1486,41 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     form = tk.Frame(panel, bg=branding.ISA_BLANCO)
     form.pack(pady=(16, 12), padx=18)
 
-    # --- Sociedad (Combobox readonly) ---
+    # --- Sociedades (Listbox multiselect) ---
+    # Multiselect: el usuario marca 1 o varias sociedades y al Generar se
+    # corre el flujo SOX una vez por cada una (un reporte por sociedad, no
+    # consolidado). `selectmode="multiple"` toggle-a con un clic simple
+    # (sin necesidad de Ctrl/Shift).
     tk.Label(
-        form, text="Sociedad:", anchor="e", width=10,
+        form, text="Sociedades:", anchor="e", width=10,
         bg=branding.ISA_BLANCO, fg=branding.ISA_AZUL,
-    ).grid(row=0, column=0, padx=4, pady=6, sticky="e")
-    sociedad_var = tk.StringVar()
-    sociedad_combo = ttk.Combobox(
-        form,
-        textvariable=sociedad_var,
-        values=list(VALID_SOCIEDADES),
-        state="readonly",
+    ).grid(row=0, column=0, padx=4, pady=6, sticky="ne")
+
+    sociedad_box = tk.Frame(form, bg=branding.ISA_BLANCO)
+    sociedad_box.grid(row=0, column=1, padx=4, pady=6, sticky="w")
+
+    sociedad_listbox = tk.Listbox(
+        sociedad_box,
+        selectmode="multiple",
+        height=len(VALID_SOCIEDADES),
         width=14,
+        exportselection=False,  # no perder la selección al enfocar otro widget
+        font=("Helvetica", 10),
+        highlightthickness=0, bd=1, relief="solid",
+        activestyle="none",
     )
-    sociedad_combo.grid(row=0, column=1, padx=4, pady=6, sticky="w")
+    for soc in VALID_SOCIEDADES:
+        sociedad_listbox.insert("end", soc)
+    sociedad_listbox.pack()
+
+    tk.Label(
+        sociedad_box, text="(puedes seleccionar varias)",
+        fg=branding.ISA_GRIS_CLARO, bg=branding.ISA_BLANCO,
+        font=("Helvetica", 8),
+    ).pack(anchor="w", pady=(2, 0))
+
+    def _sociedades_seleccionadas() -> list[str]:
+        return [sociedad_listbox.get(i) for i in sociedad_listbox.curselection()]
 
     # --- Fechas con calendario emergente (DateEntry de tkcalendar) ---
     # DateEntry abre un popup de calendario al hacer clic en la flecha.
@@ -1533,7 +1597,7 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     btn_generar.config(
         command=lambda: _generar_reporte_sox_handler(
             root,
-            sociedad_var.get(),
+            _sociedades_seleccionadas(),
             desde_var.get(),
             hasta_var.get(),
             status_var,
@@ -1555,11 +1619,11 @@ def control_sox(root: tk.Tk, frame_menu: tk.Frame) -> tk.Frame:
     frame_sox.pack(fill="both", expand=True)
 
     # Exponer widgets clave en el frame para que los tests puedan inspeccionar.
-    frame_sox.sociedad_var = sociedad_var
     frame_sox.desde_var = desde_var
     frame_sox.hasta_var = hasta_var
     frame_sox.status_var = status_var
-    frame_sox.sociedad_combo = sociedad_combo
+    frame_sox.sociedad_listbox = sociedad_listbox
+    frame_sox.sociedades_seleccionadas = _sociedades_seleccionadas
     frame_sox.desde_entry = desde_entry
     frame_sox.hasta_entry = hasta_entry
     frame_sox.btn_generar = btn_generar

@@ -149,13 +149,15 @@ Ventana principal (620x480, no redimensionable, título "Gestión de Activos Fij
 ### Vista Control SOX (frame embebido, no Toplevel)
 
 - **Patrón de switching de vistas:** `main()` envuelve todos los widgets del menú en un `frame_menu` (en vez de poner los widgets directo en `root`). Cuando el usuario presiona "Control SOX", `control_sox(root, frame_menu)` hace `frame_menu.pack_forget()` y muestra un nuevo `frame_sox` con el formulario + un botón "← Atrás". El click en Atrás destruye `frame_sox` y re-empaca `frame_menu`. El estado del menú (status_var, polling, flag `_upload_en_curso`) se preserva porque sólo se oculta, no se destruye.
-- **Sociedad**: `ttk.Combobox` en estado `readonly` (el usuario no puede escribir libre). Opciones: `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP`.
+- **Sociedades (multiselect)**: `tk.Listbox` con `selectmode="multiple"` (clic simple toggle-a, sin Ctrl) + `exportselection=False`. Opciones: `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP, XM`. El usuario marca **1 o varias**; se genera un reporte por cada una (no consolidado). El helper `_sociedades_seleccionadas()` (expuesto en el frame) devuelve las marcadas.
 - **Desde/Hasta**: `DateEntry` de tkcalendar con `date_pattern="dd.mm.yyyy"`. Validación per-keystroke (`validar_caracter_fecha`) acepta solo dígitos y puntos, máx 10 caracteres. Inicializa con la fecha actual.
 - Validaciones al pulsar **Generar Reporte SOX**:
-  1. Sociedad en lista permitida (normaliza con `.strip().upper()`).
-  2. Ambas fechas formato `dd.mm.aaaa` válido.
-  3. `Hasta >= Desde`.
-- **Durante el worker SOX**: tanto el botón Generar como el Atrás se deshabilitan; ambos se re-habilitan al finalizar (éxito o error). El usuario no puede volver al menú a mitad de un flujo SAP. Se logra porque `_generar_reporte_sox_handler` recibe ahora `(root, ..., button, btn_atras)` y usa `root.after` (no el viejo `dialog.after`) para callbacks thread-safe.
+  1. Al menos una sociedad seleccionada (lista no vacía).
+  2. Cada sociedad en lista permitida (normaliza con `.strip().upper()`).
+  3. Ambas fechas formato `dd.mm.aaaa` válido.
+  4. `Hasta >= Desde`.
+- **Worker multi-sociedad con soft-fail**: el worker hace loop por cada sociedad seleccionada llamando `generar_reporte_sox(session, soc, ...)`; si una falla se registra y **continúa con las demás** (no aborta). El status muestra `Generando N/total: SOC…` y al final un messagebox con resumen `X OK / Y con error` (showinfo si todas OK, showerror si hubo alguna con error). El fallo de conexión SAP inicial sí aborta antes del loop.
+- **Durante el worker SOX**: tanto el botón Generar como el Atrás se deshabilitan; ambos se re-habilitan al finalizar (éxito o error). El usuario no puede volver al menú a mitad de un flujo SAP. Se logra porque `_generar_reporte_sox_handler` recibe `(root, sociedades, ..., button, btn_atras)` y usa `root.after` (no el viejo `dialog.after`) para callbacks thread-safe.
 
 ## 5. Flujo SAP LSMW — `src/sap_upload.py`
 
@@ -351,7 +353,7 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 - Celdas vacías referenciadas pueden aparecer como `0`.
 - 51 columnas exportadas — algunos campos: `ANLKL` (clase de activo), `BUKRS` (sociedad), `TXT50` (denominación), `KOSTL` (centro de costo), `WERKS` (centro), `EAUFN` (orden de inversión), `POSNR` (elemento PEP), `ORD41`–`ORD44` y `GDLGRP` (criterios de clasificación 1–5).
 
-## 8. Pruebas — 373 tests con `unittest`
+## 8. Pruebas — 378 tests con `unittest`
 
 ### Estrategia de mocking SAP
 - `MockSAPSession` registra cada llamada `findById(...).method()` en `session.actions` como tuplas `(sap_id, method, *args)`.
@@ -365,7 +367,7 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 - `patch.multiple("sap_upload", ...)` inyecta mocks; se guardan en `self.mocks`.
 
 ### Distribución
-- `tests/test_main.py` (100): handlers GUI, extracción TSV (incluye `test_warns_and_aborts_when_multiple_xlsm_in_entrada` — advertencia bloqueante ante múltiples `.xlsm` en `entrada/`), vista SOX como frame embebido (`ControlSoxDialogTest` incluye `test_date_entries_do_not_use_key_validation` — regresión del bug del calendario donde `validate="key"` rompía el `_select` del popup), `FooterCopyrightTest` (3 tests: año actual, estilo discreto, packed `side="bottom"`), `CerrarSplashTest` (no-op silencioso de `_cerrar_splash` en dev mode), `GenerarReporteSoxHandlerTest` (deshabilitado de Generar+Atrás durante worker).
+- `tests/test_main.py` (105): handlers GUI, extracción TSV (incluye `test_warns_and_aborts_when_multiple_xlsm_in_entrada` — advertencia bloqueante ante múltiples `.xlsm` en `entrada/`), vista SOX como frame embebido (`ControlSoxDialogTest` incluye el multiselect de sociedades — Listbox `selectmode="multiple"`, helper `sociedades_seleccionadas`, presencia de `XM` — y `test_date_entries_do_not_use_key_validation`, regresión del bug del calendario donde `validate="key"` rompía el `_select` del popup), `GenerarReporteSoxHandlerTest` (deshabilitado de Generar+Atrás durante worker, **multiselect: un reporte por sociedad, soft-fail que continúa con las demás, lista vacía → error**), `FooterCopyrightTest` (3 tests: año actual, estilo discreto, packed `side="bottom"`), `CerrarSplashTest` (no-op silencioso de `_cerrar_splash` en dev mode).
 - `tests/test_paths.py` (18): helpers de modo dev/bundled (PyInstaller). `ProjectRootTest` (`sys.frozen` vs dev), `BundledResourcePathTest` (lectura de `sys._MEIPASS`), `ListarXlsmEntradaTest` (glob de `.xlsm` en `entrada/`, ignora otras extensiones), `FormatoDinamicoPathTest` (resolución: prefiere canónico, si no el primero, si vacío devuelve canónico), `ValidarEntradaUnicaTest` (0/1 ok, ≥2 advierte con `MENSAJE_ENTRADA_MULTIPLE`), `AsegurarFormatoDinamicoTest` (factory default `Formato_Dinamico.xlsm`: primer arranque copia, segundo preserva ediciones, no copia si el usuario dejó un `.xlsm` con otro nombre, bundle ausente devuelve path sin crashear).
 - `tests/test_branding.py` (15): paleta corporativa Hub de ISA, `cargar_logo` (escalado por aspect ratio, referencias persistentes), `aplicar_estilo_primario`/`aplicar_estilo_terciario`.
 - `tests/test_sox_report.py` (105): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso Población) + `PatronAfRegexTest` (6 tests del parseo de col D) + `GenerarHojaCreadosTest` (16 tests del paso post-procesamiento: filter, parsing, estructura, K y L como fórmulas =MID/=IF, replace idempotente, errores) + `EjecutarReporteTest` (2 tests del split de F8) + `GenerarHojaIpeTest` (8 tests de la hoja de evidencias: crear, embedding, soft-fail, replace, scaling) + `GenerarReporteSoxTest` (verifica orden de las 7 etapas incluyendo screenshots, paso a las funciones, `EXPORT_METHOD=None` salta Población/Creados/IPE).

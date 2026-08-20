@@ -891,27 +891,48 @@ class ControlSoxDialogTest(unittest.TestCase):
         finally:
             frame_sox.destroy()
 
-    def test_frame_has_sociedad_combobox_with_valid_values(self) -> None:
+    def test_frame_has_sociedad_listbox_with_valid_values(self) -> None:
         frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
             from sox_report import VALID_SOCIEDADES
+            items = tuple(
+                frame_sox.sociedad_listbox.get(0, "end")
+            )
+            self.assertEqual(items, VALID_SOCIEDADES)
+        finally:
+            frame_sox.destroy()
+
+    def test_sociedad_listbox_is_multiselect(self) -> None:
+        frame_sox = main.control_sox(self.root, self.frame_menu)
+        try:
             self.assertEqual(
-                tuple(frame_sox.sociedad_combo["values"]), VALID_SOCIEDADES
+                str(frame_sox.sociedad_listbox["selectmode"]), "multiple"
             )
         finally:
             frame_sox.destroy()
 
-    def test_sociedad_combobox_is_readonly(self) -> None:
+    def test_sociedades_seleccionadas_returns_marked_items(self) -> None:
+        """El helper expuesto devuelve la lista de sociedades marcadas."""
         frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            self.assertEqual(str(frame_sox.sociedad_combo["state"]), "readonly")
+            frame_sox.sociedad_listbox.selection_set(1)  # ISA
+            frame_sox.sociedad_listbox.selection_set(2)  # ITCH
+            self.assertEqual(
+                frame_sox.sociedades_seleccionadas(), ["ISA", "ITCH"]
+            )
+        finally:
+            frame_sox.destroy()
+
+    def test_xm_is_in_sociedad_list(self) -> None:
+        frame_sox = main.control_sox(self.root, self.frame_menu)
+        try:
+            self.assertIn("XM", frame_sox.sociedad_listbox.get(0, "end"))
         finally:
             frame_sox.destroy()
 
     def test_frame_exposes_form_state_variables(self) -> None:
         frame_sox = main.control_sox(self.root, self.frame_menu)
         try:
-            self.assertIsInstance(frame_sox.sociedad_var, tk.StringVar)
             self.assertIsInstance(frame_sox.desde_var, tk.StringVar)
             self.assertIsInstance(frame_sox.hasta_var, tk.StringVar)
             self.assertIsInstance(frame_sox.status_var, tk.StringVar)
@@ -1230,7 +1251,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
         with patch("main.messagebox.showerror") as mock_err, \
              patch("main.messagebox.askyesno") as mock_ask:
             main._generar_reporte_sox_handler(
-                self.root, "XYZ", "01.05.2026", "31.05.2026",
+                self.root, ["XYZ"], "01.05.2026", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 
@@ -1244,7 +1265,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
         with patch("main.messagebox.showerror") as mock_err, \
              patch("main.messagebox.askyesno"):
             main._generar_reporte_sox_handler(
-                self.root, "ISA", "no-es-fecha", "31.05.2026",
+                self.root, ["ISA"], "no-es-fecha", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 
@@ -1255,7 +1276,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
         with patch("main.messagebox.showerror") as mock_err, \
              patch("main.messagebox.askyesno"):
             main._generar_reporte_sox_handler(
-                self.root, "ISA", "31.05.2026", "01.05.2026",
+                self.root, ["ISA"], "31.05.2026", "01.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 
@@ -1267,7 +1288,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
         with patch("main.messagebox.askyesno", return_value=False), \
              patch("main.threading.Thread") as mock_thread:
             main._generar_reporte_sox_handler(
-                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.root, ["ISA"], "01.05.2026", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 
@@ -1283,7 +1304,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
                  return_value=("/tmp/salida", "Población_ISA_31.05.2026.xlsx"),
              ) as mock_flow:
             main._generar_reporte_sox_handler(
-                self.root, "isa", "01.05.2026", "31.05.2026",
+                self.root, ["isa"], "01.05.2026", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 
@@ -1293,6 +1314,70 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
         self.assertEqual(args[1], "ISA")  # normalizada a uppercase
         self.assertEqual(args[2], "01.05.2026")
         self.assertEqual(args[3], "31.05.2026")
+
+    def test_shows_error_when_no_sociedad_selected(self) -> None:
+        """Lista vacía → error y NO se pide confirmación ni se lanza worker."""
+        with patch("main.messagebox.showerror") as mock_err, \
+             patch("main.messagebox.askyesno") as mock_ask, \
+             patch("main.threading.Thread") as mock_thread:
+            main._generar_reporte_sox_handler(
+                self.root, [], "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
+            )
+
+        mock_err.assert_called_once()
+        self.assertEqual(mock_err.call_args[0][0], "Datos inválidos")
+        self.assertIn("al menos una sociedad", mock_err.call_args[0][1])
+        mock_ask.assert_not_called()
+        mock_thread.assert_not_called()
+
+    def test_multiselect_generates_one_report_per_sociedad(self) -> None:
+        """Con 3 sociedades seleccionadas → 3 llamadas al flujo (una por
+        sociedad), con la sociedad correcta en cada una."""
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showinfo"), \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("sox_report.get_sap_session", return_value=MagicMock()), \
+             patch(
+                 "sox_report.generar_reporte_sox",
+                 return_value=("/tmp", "x.xlsx"),
+             ) as mock_flow:
+            main._generar_reporte_sox_handler(
+                self.root, ["ISA", "ITCH", "XM"], "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
+            )
+
+        self.assertEqual(mock_flow.call_count, 3)
+        sociedades_llamadas = [c.args[1] for c in mock_flow.call_args_list]
+        self.assertEqual(sociedades_llamadas, ["ISA", "ITCH", "XM"])
+
+    def test_multiselect_soft_fail_continues_with_remaining(self) -> None:
+        """Si el flujo falla para una sociedad, se sigue con las demás y se
+        muestra un resumen de error (no aborta todo)."""
+        def flow(session, soc, desde, hasta):
+            if soc == "ITCH":
+                raise RuntimeError("SAP se pegó en ITCH")
+            return ("/tmp", f"Población_{soc}.xlsx")
+
+        with patch("main.messagebox.askyesno", return_value=True), \
+             patch("main.messagebox.showerror") as mock_err, \
+             patch("main.messagebox.showinfo") as mock_info, \
+             patch("main.threading.Thread", _SyncFakeThread), \
+             patch("sox_report.get_sap_session", return_value=MagicMock()), \
+             patch("sox_report.generar_reporte_sox", side_effect=flow) as mock_flow:
+            main._generar_reporte_sox_handler(
+                self.root, ["ISA", "ITCH", "XM"], "01.05.2026", "31.05.2026",
+                self.status_var, self.button, self.btn_atras,
+            )
+
+        # Las 3 se intentaron (soft-fail no aborta).
+        self.assertEqual(mock_flow.call_count, 3)
+        # Hubo error → showerror con resumen; showinfo NO se usa.
+        mock_err.assert_called_once()
+        mock_info.assert_not_called()
+        resumen = mock_err.call_args[0][1]
+        self.assertIn("SAP se pegó en ITCH", resumen)
+        self.assertIn("2", resumen)  # 2 OK
 
     def test_worker_disables_buttons_during_execution_and_reenables_after(self) -> None:
         """Tanto el botón Generar como el Atrás deben re-habilitarse tras
@@ -1306,7 +1391,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
                  return_value=("/tmp", "x.xlsx"),
              ):
             main._generar_reporte_sox_handler(
-                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.root, ["ISA"], "01.05.2026", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 
@@ -1337,7 +1422,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
                  return_value=("/tmp", "x.xlsx"),
              ):
             main._generar_reporte_sox_handler(
-                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.root, ["ISA"], "01.05.2026", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 
@@ -1352,7 +1437,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
                  side_effect=RuntimeError("no SAP"),
              ):
             main._generar_reporte_sox_handler(
-                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.root, ["ISA"], "01.05.2026", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 
@@ -1370,7 +1455,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
                  side_effect=Exception("paso 4 falló"),
              ):
             main._generar_reporte_sox_handler(
-                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.root, ["ISA"], "01.05.2026", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 
@@ -1391,7 +1476,7 @@ class GenerarReporteSoxHandlerTest(unittest.TestCase):
             mock_cm.return_value.__enter__ = MagicMock(return_value=None)
             mock_cm.return_value.__exit__ = MagicMock(return_value=False)
             main._generar_reporte_sox_handler(
-                self.root, "ISA", "01.05.2026", "31.05.2026",
+                self.root, ["ISA"], "01.05.2026", "31.05.2026",
                 self.status_var, self.button, self.btn_atras,
             )
 

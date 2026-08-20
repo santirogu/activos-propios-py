@@ -133,7 +133,7 @@ python src/extraer_activos_creados.py 1017209574
 
 Cuarto botón. Abre una sub-vista que permite adjuntar uno o varios archivos a CADA activo fijo. Por defecto la lista de activos sale del último `ActivosCreados_*.xlsx` (de "Extraer Activos Creados"), pero el usuario puede **subir su propio `.xlsx` de activos existentes** para reemplazarla. El form contiene:
 
-- **Sociedad** (Combobox readonly con `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP`).
+- **Sociedad** (Combobox readonly con `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP, XM`).
 - **Lista de activos (opcional)** — sección con `[Cargar .xlsx]` + `[Quitar]` + label de estado. Permite cargar un `.xlsx` con los activos a los que adjuntar. Estructura exigida: **extensión `.xlsx` exclusivamente**, **una sola hoja**, **fila de encabezado obligatoria** y **exactamente 2 columnas** (Activo Fijo, Subnúmero). Se **valida al seleccionar**: si cumple, muestra `nombre.xlsx — N activo(s)`; si no, una advertencia clara y corta para corregir. Con `[Quitar]` se vuelve al comportamiento por defecto.
 - **Anexos a subir** — sección con `Seleccionar archivos` (abre el diálogo nativo de Windows para elegir 1+ anexos), `Quitar seleccionado`, y un Listbox que muestra los anexos elegidos.
 - **Subir Anexos a SAP** — dispara el flujo.
@@ -167,15 +167,16 @@ La estructura intermedia permite añadir en el futuro más opciones HUB.PPE.XX s
 
 Reemplaza la vista del intermedio por un formulario embebido en la misma ventana (no abre un Toplevel separado). Arriba a la izquierda aparece un botón **"← Atrás"** que devuelve al intermedio. El formulario sirve para generar el **Reporte SOX** desde SAP:
 
-- **Sociedad** — selector desplegable (`Combobox` en estado `readonly`) con las opciones: `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP`. El usuario no puede escribir valores arbitrarios.
+- **Sociedades (multiselect)** — una lista (`Listbox` con `selectmode="multiple"`) con las opciones: `TRAN, ISA, ITCH, CEYA, CABA, RPAE, CTMP, REPD, ISAP, XM`. El usuario marca **una o varias** con un clic simple (no necesita Ctrl). Se genera **un reporte por cada sociedad seleccionada** (no un consolidado).
 - **Desde** / **Hasta** — campos con **calendario emergente** (`DateEntry` de `tkcalendar`). El usuario puede elegir la fecha del calendario o escribirla a mano. Aún en escritura manual, el `validatecommand` restringe a dígitos y puntos (máx 10 caracteres). Formato `dd.mm.aaaa`.
 
 Validaciones al presionar **"Generar Reporte SOX"**:
-1. Sociedad debe estar en la lista permitida.
-2. Ambas fechas deben tener formato `dd.mm.aaaa` válido.
-3. `Hasta` debe ser `>=` `Desde`.
+1. Al menos una sociedad seleccionada.
+2. Cada sociedad debe estar en la lista permitida.
+3. Ambas fechas deben tener formato `dd.mm.aaaa` válido.
+4. `Hasta` debe ser `>=` `Desde`.
 
-Si cualquier validación falla, se muestra un diálogo de error y no se ejecuta nada. Si todo es válido, se pide confirmación y el flujo SAP corre en un hilo background. Durante la ejecución del worker, tanto el botón **"Generar Reporte SOX"** como el **"← Atrás"** se deshabilitan (el usuario no puede volver al menú a mitad de un flujo SAP); ambos se re-habilitan al finalizar. Al terminar quedan **dos archivos** en `salida/`:
+Si cualquier validación falla, se muestra un diálogo de error y no se ejecuta nada. Si todo es válido, se pide confirmación (listando todas las sociedades elegidas) y el flujo SAP corre en un hilo background. El worker **itera por cada sociedad** llamando al flujo SOX una vez por cada una, con **soft-fail**: si una falla, se registra y se continúa con las demás; al final se muestra un resumen `X OK / Y con error`. Durante la ejecución, tanto **"Generar Reporte SOX"** como **"← Atrás"** se deshabilitan (el usuario no puede volver al menú a mitad de un flujo SAP); ambos se re-habilitan al finalizar. Por **cada sociedad** quedan **dos archivos** en `salida/`:
 
 - **Intermedio** `SOX_<SOCIEDAD>_<YYYYMMDD_HHMMSS>.xlsx` — lo que SAP exportó vía `&XXL` del ALV grid.
 - **Final / deliverable** `Población_<SOCIEDAD>_<FECHA_HASTA>.xlsx` — generado en Python con **tres hojas**:
@@ -260,9 +261,9 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **373 pruebas** distribuidas en siete archivos:
+La suite contiene **378 pruebas** distribuidas en siete archivos:
 
-#### `tests/test_main.py` (100 pruebas)
+#### `tests/test_main.py` (105 pruebas)
 
 **`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
 
@@ -295,9 +296,9 @@ La suite contiene **373 pruebas** distribuidas en siete archivos:
 
 **`SubirASapFlagTest`** (5 pruebas) — gestión correcta del flag `_upload_en_curso`: True durante el worker, False tras éxito o error, no se setea si el usuario cancela, botón queda disabled si `salida/` queda vacía tras el upload.
 
-**`ControlSoxDialogTest`** (9 pruebas) — `control_sox(root, frame_menu)` oculta el menú y muestra un `frame_sox` embebido en `root` (no Toplevel). Expone Combobox con valores válidos + readonly, StringVars del formulario, el botón "← Atrás" y verifica que al pulsarlo el `frame_sox` se destruye y el `frame_menu` vuelve a pack. Los campos Desde/Hasta son `DateEntry` (calendario emergente) que escriben en formato `dd.mm.aaaa` e inicializan con la fecha actual.
+**`ControlSoxDialogTest`** (12 pruebas) — `control_sox(root, frame_menu)` oculta el menú y muestra un `frame_sox` embebido en `root` (no Toplevel). Expone un **Listbox multiselect** de sociedades (`selectmode="multiple"`, valores == `VALID_SOCIEDADES`, incluye `XM`) con el helper `sociedades_seleccionadas()`, StringVars del formulario, el botón "← Atrás" y verifica que al pulsarlo el `frame_sox` se destruye y el `frame_menu` vuelve a pack. Los campos Desde/Hasta son `DateEntry` (calendario emergente) que escriben en formato `dd.mm.aaaa` e inicializan con la fecha actual.
 
-**`GenerarReporteSoxHandlerTest`** (10 pruebas) — handler del botón "Generar Reporte SOX": validación de sociedad, formato de fecha, rango fechas, cancelación, happy path con normalización de sociedad, gestión del estado del botón Generar y del botón Atrás (ambos deshabilitados durante el worker, re-habilitados al final), y manejo de errores en el worker (SAP no disponible, flujo falla, contexto COM apartment).
+**`GenerarReporteSoxHandlerTest`** (13 pruebas) — handler del botón "Generar Reporte SOX": validación (sin sociedad seleccionada, sociedad inválida, formato de fecha, rango fechas), cancelación, happy path con normalización, **multiselect** (un reporte por cada sociedad seleccionada, soft-fail que continúa con las demás ante un error), gestión del estado del botón Generar y del botón Atrás (ambos deshabilitados durante el worker, re-habilitados al final), y manejo de errores en el worker (SAP no disponible, flujo falla, contexto COM apartment).
 
 **`SubirASapTest`** (11 pruebas) — handler del botón "Subir a SAP":
 
@@ -505,7 +506,7 @@ No sirve para entregar al usuario final.
 │   ├── extraer_activos_creados.py   # SM35P: filtro por usuario SAP + export del log
 │   └── subir_anexos.py              # AS02 + GOS PCATTA_CREA: adjunta archivos a cada activo
 ├── tests/
-│   ├── test_main.py                 # 100 pruebas: extracción + botones + vistas + footer + splash + regresión calendario
+│   ├── test_main.py                 # 105 pruebas: extracción + botones + vistas + multiselect SOX + footer + splash + regresión calendario
 │   ├── test_paths.py                # 18 pruebas: helpers dev/bundled + resolución entrada/ + factory default + validación 1-xlsm
 │   ├── test_branding.py             # 15 pruebas: paleta + logo + estilos de botón
 │   ├── test_sap_upload.py           # 46 pruebas: flujo LSMW completo
