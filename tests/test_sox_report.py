@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import sox_report  # noqa: E402
 from sox_report import (  # noqa: E402
+    BTN_ATRAS_SAP,
     CAMPO_FECHA_DESDE,
     CAMPO_FECHA_HASTA,
     CAMPO_SOCIEDAD,
@@ -47,6 +48,7 @@ from sox_report import (  # noqa: E402
     validar_fecha,
     validar_rango_fechas,
     validar_sociedad,
+    volver_a_pantalla_inicial,
 )
 
 
@@ -633,6 +635,36 @@ class StepErrorContextTest(unittest.TestCase):
             sox_report.EXPORT_METHOD = original_method
 
 
+class VolverPantallaInicialTest(unittest.TestCase):
+    """`volver_a_pantalla_inicial` devuelve SAP a la pantalla inicial
+    presionando Atrás (F3, `wnd[0]/tbar[0]/btn[3]`) — extraído del final de
+    `resources/ScriptanexoREP.vbs`."""
+
+    def test_presses_back_twice_by_default(self):
+        session = MockSAPSession()
+        volver_a_pantalla_inicial(session)
+        self.assertEqual(
+            session.actions,
+            [(BTN_ATRAS_SAP, "press"), (BTN_ATRAS_SAP, "press")],
+        )
+
+    def test_respects_veces_parameter(self):
+        session = MockSAPSession()
+        volver_a_pantalla_inicial(session, veces=3)
+        self.assertEqual(
+            [a for a in session.actions if a[1] == "press"],
+            [(BTN_ATRAS_SAP, "press")] * 3,
+        )
+
+    def test_best_effort_does_not_raise_when_back_fails(self):
+        """Si el botón Atrás no está disponible, no se relanza (best-effort):
+        el flujo no debe abortar por no poder navegar hacia atrás."""
+        session = MagicMock()
+        session.findById.side_effect = RuntimeError("control not found")
+        # No debe lanzar.
+        volver_a_pantalla_inicial(session)
+
+
 class GenerarReporteSoxTest(unittest.TestCase):
     """El orquestador llama a las 7 etapas (SAP + post-procesamiento + IPE)
     en orden. Tests mockean SAP + screenshot helpers para correr sin
@@ -652,6 +684,7 @@ class GenerarReporteSoxTest(unittest.TestCase):
         "generar_xlsx_poblacion",
         "generar_hoja_creados",
         "generar_hoja_ipe",
+        "volver_a_pantalla_inicial",
     )
 
     def _patch_all(self, return_overrides=None):
@@ -687,6 +720,7 @@ class GenerarReporteSoxTest(unittest.TestCase):
             generar_xlsx_poblacion=make_recorder("poblacion", fake_poblacion),
             generar_hoja_creados=make_recorder("creados"),
             generar_hoja_ipe=make_recorder("ipe"),
+            volver_a_pantalla_inicial=make_recorder("volver"),
         ):
             generar_reporte_sox(
                 session, "ISA", "01.05.2026", "31.05.2026",
@@ -695,14 +729,16 @@ class GenerarReporteSoxTest(unittest.TestCase):
 
         # Verificar que los pasos clave aparecen en el orden correcto. No
         # validamos cada captura individualmente (se hace en tests
-        # dedicados); aquí sólo el flujo global.
+        # dedicados); aquí sólo el flujo global. `volver` (retorno a la
+        # pantalla inicial) va al FINAL, para dejar SAP listo para la
+        # siguiente sociedad del multiselect.
         self.assertEqual(
             [step for step in call_order if step in {
                 "abrir", "ingresar", "ejecutar", "exportar",
-                "poblacion", "creados", "ipe",
+                "poblacion", "creados", "ipe", "volver",
             }],
             ["abrir", "ingresar", "ejecutar", "exportar",
-             "poblacion", "creados", "ipe"],
+             "poblacion", "creados", "ipe", "volver"],
         )
         # Capturas: 5 en total (4 _capturar_pantalla + 1 _capturar_propiedades_archivo).
         self.assertEqual(call_order.count("captura"), 4)

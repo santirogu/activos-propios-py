@@ -52,7 +52,8 @@ La autenticación SAP es manual; el script no logea al usuario, solo se conecta 
 │   ├── Script1.vbs / Script2.vbs     # Grabaciones VBS del flujo LSMW (paso Specify Files)
 │   ├── Script2sox.vbs                # Grabación VBS del SOX (T-code AR15 + calendario F4)
 │   ├── ScriptSM35P.vbs               # Grabación VBS del flujo Extraer Activos Creados
-│   └── Scriptanexo.vbs               # Grabación VBS del flujo Subir Anexos
+│   ├── Scriptanexo.vbs               # Grabación VBS del flujo Subir Anexos
+│   └── ScriptanexoREP.vbs            # Grabación VBS del SOX con el retorno a pantalla inicial (Atrás ×2)
 ├── docs/
 │   └── flujo-proceso.png             # Diagrama del proceso end-to-end
 ├── entrada/                          # Generada en runtime junto al .exe (ignorada por git): el Formato_Dinamico.xlsm editable
@@ -200,7 +201,8 @@ Replica las grabaciones VBS de SAP. Granularidad fina: cada paso es una función
 Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calendario F4, reemplazando la grabación inicial frágil con nodos F00xxx del árbol que sigue en `Scriptsox.vbs`).
 
 ### Constantes clave
-- `T_CODE_SOX = "AR15"` — camino preferido (robusto). Si es `None`, hace fallback al árbol con `SOX_NODE_KEY = "F00039"` (frágil entre usuarios).
+- `T_CODE_SOX = "/nAR15"` — camino preferido (robusto). El prefijo `/n` fuerza a SAP a cancelar la transacción actual y abrir AR15 **fresca desde cualquier pantalla** — imprescindible para el multiselect: sin `/n`, tras el reporte de una sociedad SAP queda en la pantalla de resultados y la siguiente sociedad falla. Si es `None`, hace fallback al árbol con `SOX_NODE_KEY = "F00039"` (frágil entre usuarios).
+- `BTN_ATRAS_SAP = "wnd[0]/tbar[0]/btn[3]"` — botón Atrás (F3) de SAP. `volver_a_pantalla_inicial(session, veces=2)` lo presiona 2 veces al final de cada reporte para devolver SAP a la pantalla inicial (extraído de `resources/ScriptanexoREP.vbs`). Es **best-effort** (no aborta si falla) y **fijo en 2** (presionar Atrás de más en la pantalla inicial dispara el popup "¿Desea salir?"). El caso de fallo a mitad de flujo lo cubre el prefijo `/nAR15`.
 - `TREE_SHELL = "wnd[0]/usr/cntlIMAGE_CONTAINER/shellcont/shell/shellcont[0]/shell"` — árbol del menú SAP.
 - `CALENDAR_SHELL = "wnd[1]/usr/cntlCONTAINER/shellcont/shell"` — calendario emergente F4.
 - `DATE_FORMAT_USER = "%d.%m.%Y"` (formulario) y `DATE_FORMAT_SAP_CALENDAR = "%Y%m%d"` (calendario SAP).
@@ -215,7 +217,7 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 
 | # | Función | Acciones SAP / Python |
 |---|---|---|
-| 1 | `abrir_transaccion_sox` | maximize + okcd="AR15" + Enter. Fallback: `tree.doubleClickNode("F00039")` |
+| 1 | `abrir_transaccion_sox` | maximize + okcd="/nAR15" + Enter. Fallback: `tree.doubleClickNode("F00039")` |
 | 2a | `ingresar_parametros` | `P_BUKRS.text = sociedad` (ya NO incluye F8 — se split para permitir captura) |
 | 2b | `_seleccionar_fecha_calendario` (Desde) | foco campo + caretPosition 0 + F4 → calendar.focusDate / selectionInterval con `yyyymmdd` |
 | 2c | `_seleccionar_fecha_calendario` (Hasta) | Igual para S_DATUM-HIGH |
@@ -229,6 +231,7 @@ Replica `resources/Script2sox.vbs` (versión actualizada con T-code AR15 + calen
 | 5 | `generar_xlsx_poblacion` (post-SAP, pure Python) | Lee el intermedio con openpyxl, copia su contenido (celda por celda, preservando `number_format` para que Fecha y Hora se vean como en SAP) a una nueva hoja `Original_SAP` y guarda como `Población_{SOC}_{FECHA_HASTA}.xlsx`. Si `EXPORT_METHOD=None`, este paso y los siguientes se omiten. |
 | 6 | `generar_hoja_creados(poblacion)` (post-procesamiento, pure Python) | Abre el Población, lee `Original_SAP`, filtra filas con G == `*** creado ***`, parsea la columna D con `PATRON_AF` y produce una **segunda hoja `Creados`** con observaciones (filas 1-9), headers en bold (fila 10), datos desde fila 11. Columnas K y L como fórmulas Excel en inglés (estándar OOXML, Excel-ES traduce a EXTRAE/SI). |
 | 7 | `generar_hoja_ipe(poblacion, screenshots_dir)` (paso final, pure Python) | Lee los 5 PNG del tempdir y los embebe en una **tercera hoja `IPE`** con título + descripción + imagen escalada a `IPE_IMAGE_MAX_WIDTH=1200px`. Soft-fail: capturas faltantes (porque PIL no estaba, el scroll falló, o el diálogo Propiedades no abrió) se anotan como "no disponible" pero el flujo continúa. Es el **deliverable final** que devuelve `generar_reporte_sox`. El tempdir se limpia automáticamente al salir del `with tempfile.TemporaryDirectory(...)`. |
+| 8 | `volver_a_pantalla_inicial(session)` | Presiona Atrás (F3, `BTN_ATRAS_SAP`) **2 veces** para devolver SAP a la pantalla inicial, dejándolo listo para la siguiente sociedad del multiselect. Best-effort (no aborta si falla). Se ejecuta antes de cada `return` de `generar_reporte_sox` (camino normal y `EXPORT_METHOD=None`). |
 
 ### Helpers
 - `validar_sociedad` / `validar_fecha` / `validar_rango_fechas` / `validar_caracter_fecha` — validaciones puras, testeables sin SAP.
@@ -353,7 +356,7 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 - Celdas vacías referenciadas pueden aparecer como `0`.
 - 51 columnas exportadas — algunos campos: `ANLKL` (clase de activo), `BUKRS` (sociedad), `TXT50` (denominación), `KOSTL` (centro de costo), `WERKS` (centro), `EAUFN` (orden de inversión), `POSNR` (elemento PEP), `ORD41`–`ORD44` y `GDLGRP` (criterios de clasificación 1–5).
 
-## 8. Pruebas — 378 tests con `unittest`
+## 8. Pruebas — 381 tests con `unittest`
 
 ### Estrategia de mocking SAP
 - `MockSAPSession` registra cada llamada `findById(...).method()` en `session.actions` como tuplas `(sap_id, method, *args)`.
@@ -370,7 +373,7 @@ Replica `resources/Scriptanexo.vbs` (sin la navegación manual de carpetas que e
 - `tests/test_main.py` (105): handlers GUI, extracción TSV (incluye `test_warns_and_aborts_when_multiple_xlsm_in_entrada` — advertencia bloqueante ante múltiples `.xlsm` en `entrada/`), vista SOX como frame embebido (`ControlSoxDialogTest` incluye el multiselect de sociedades — checkboxes `soc_vars`, helper `sociedades_seleccionadas`, arranque sin marcar, presencia de `XM` — y `test_date_entries_do_not_use_key_validation`, regresión del bug del calendario donde `validate="key"` rompía el `_select` del popup), `GenerarReporteSoxHandlerTest` (deshabilitado de Generar+Atrás durante worker, **multiselect: un reporte por sociedad, soft-fail que continúa con las demás, lista vacía → error**), `FooterCopyrightTest` (3 tests: año actual, estilo discreto, packed `side="bottom"`), `CerrarSplashTest` (no-op silencioso de `_cerrar_splash` en dev mode).
 - `tests/test_paths.py` (18): helpers de modo dev/bundled (PyInstaller). `ProjectRootTest` (`sys.frozen` vs dev), `BundledResourcePathTest` (lectura de `sys._MEIPASS`), `ListarXlsmEntradaTest` (glob de `.xlsm` en `entrada/`, ignora otras extensiones), `FormatoDinamicoPathTest` (resolución: prefiere canónico, si no el primero, si vacío devuelve canónico), `ValidarEntradaUnicaTest` (0/1 ok, ≥2 advierte con `MENSAJE_ENTRADA_MULTIPLE`), `AsegurarFormatoDinamicoTest` (factory default `Formato_Dinamico.xlsm`: primer arranque copia, segundo preserva ediciones, no copia si el usuario dejó un `.xlsm` con otro nombre, bundle ausente devuelve path sin crashear).
 - `tests/test_branding.py` (15): paleta corporativa Hub de ISA, `cargar_logo` (escalado por aspect ratio, referencias persistentes), `aplicar_estilo_primario`/`aplicar_estilo_terciario`.
-- `tests/test_sox_report.py` (105): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso Población) + `PatronAfRegexTest` (6 tests del parseo de col D) + `GenerarHojaCreadosTest` (16 tests del paso post-procesamiento: filter, parsing, estructura, K y L como fórmulas =MID/=IF, replace idempotente, errores) + `EjecutarReporteTest` (2 tests del split de F8) + `GenerarHojaIpeTest` (8 tests de la hoja de evidencias: crear, embedding, soft-fail, replace, scaling) + `GenerarReporteSoxTest` (verifica orden de las 7 etapas incluyendo screenshots, paso a las funciones, `EXPORT_METHOD=None` salta Población/Creados/IPE).
+- `tests/test_sox_report.py` (108): validaciones puras + pasos del flujo SAP + `GenerarXlsxPoblacionTest` (11 tests del paso Población) + `PatronAfRegexTest` (6 tests del parseo de col D) + `GenerarHojaCreadosTest` (16 tests del paso post-procesamiento: filter, parsing, estructura, K y L como fórmulas =MID/=IF, replace idempotente, errores) + `EjecutarReporteTest` (2 tests del split de F8) + `GenerarHojaIpeTest` (8 tests de la hoja de evidencias: crear, embedding, soft-fail, replace, scaling) + `VolverPantallaInicialTest` (3 tests: 2 Atrás por default, `veces` parametrizable, best-effort sin relanzar) + `GenerarReporteSoxTest` (verifica orden de las etapas incluyendo screenshots y el retorno `volver` al final, paso a las funciones, `EXPORT_METHOD=None` salta Población/Creados/IPE).
 - `tests/test_sap_upload.py` (46): cada paso del flujo LSMW + `MainEntryPointTest`.
 - `tests/test_extraer_activos_creados.py` (48): cada paso del flujo SM35P + post-procesamiento del .xlsx.
 - `tests/test_subir_anexos.py` (41): cada paso del flujo AS02+GOS PCATTA_CREA + orquestador soft-fail + `ValidarYLeerActivosUsuarioTest` (10 tests de la validación del `.xlsx` del usuario: válido, extensión, ≥2 hojas, >2 columnas, sin encabezado, datos no numéricos, solo encabezado, números como texto, floats enteros, filas vacías al final) + override `activos=` en el orquestador (prioridad sobre `salida/`, vacío → error).

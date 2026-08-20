@@ -261,7 +261,7 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **378 pruebas** distribuidas en siete archivos:
+La suite contiene **381 pruebas** distribuidas en siete archivos:
 
 #### `tests/test_main.py` (105 pruebas)
 
@@ -316,7 +316,7 @@ La suite contiene **378 pruebas** distribuidas en siete archivos:
 | `test_worker_handles_lsmw_flow_error` | Excepción del flujo → error, NO muestra info de éxito |
 | `test_worker_resets_status_on_error` | `status_var` se vacía tras error |
 
-#### `tests/test_sox_report.py` (105 pruebas)
+#### `tests/test_sox_report.py` (108 pruebas)
 
 | Clase | Tests | Cobertura |
 |---|---|---|
@@ -510,7 +510,7 @@ No sirve para entregar al usuario final.
 │   ├── test_paths.py                # 18 pruebas: helpers dev/bundled + resolución entrada/ + factory default + validación 1-xlsm
 │   ├── test_branding.py             # 15 pruebas: paleta + logo + estilos de botón
 │   ├── test_sap_upload.py           # 46 pruebas: flujo LSMW completo
-│   ├── test_sox_report.py           # 105 pruebas: validaciones + flujo SOX + Población + Creados + IPE
+│   ├── test_sox_report.py           # 108 pruebas: validaciones + flujo SOX + Población + Creados + IPE + retorno pantalla inicial
 │   ├── test_extraer_activos_creados.py  # 48 pruebas
 │   └── test_subir_anexos.py         # 41 pruebas: flujo AS02+GOS + orquestador + validación del .xlsx del usuario
 ├── resources/                       # Recursos internos del proyecto (bundleados read-only en el .exe)
@@ -520,7 +520,8 @@ No sirve para entregar al usuario final.
 │   ├── Script1.vbs                  # Grabación VBS: ruta dinámica en Specify Files
 │   ├── Script2sox.vbs               # Grabación VBS del flujo SOX (AR15 + calendario F4)
 │   ├── ScriptSM35P.vbs              # Grabación VBS del flujo SM35P (extraer activos creados)
-│   └── Scriptanexo.vbs              # Grabación VBS del flujo AS02 + GOS PCATTA_CREA
+│   ├── Scriptanexo.vbs              # Grabación VBS del flujo AS02 + GOS PCATTA_CREA
+│   └── ScriptanexoREP.vbs           # Grabación VBS del SOX con retorno a pantalla inicial (Atrás ×2)
 ├── docs/
 │   └── flujo-proceso.png            # Diagrama del proceso completo
 ├── entrada/                         # Generada en runtime junto al .exe: el Formato_Dinamico.xlsm editable (ignorada por git)

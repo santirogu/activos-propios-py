@@ -157,7 +157,21 @@ SOX_NODE_KEY = "F00039"
 # Si la T-code real de tu instalación es otra (variante Z*), ajustar aquí.
 #
 # Si se deja en None, el script hace fallback al árbol con SOX_NODE_KEY.
-T_CODE_SOX: str | None = "AR15"
+#
+# Prefijo "/n": fuerza a SAP a CANCELAR la transacción actual y abrir AR15
+# FRESCA desde cualquier pantalla. Es imprescindible para el multiselect: al
+# terminar el reporte de una sociedad, SAP queda en la pantalla de resultados
+# de AR15; sin "/n", escribir "AR15" crudo en la casilla de comandos desde
+# ahí no reinicia la transacción y la siguiente sociedad falla. Mismo patrón
+# que `subir_anexos.T_CODE_AS02 = "/nas02"`.
+T_CODE_SOX: str | None = "/nAR15"
+
+# Botón "Atrás" (F3) estándar de la barra de herramientas de SAP. Presionarlo
+# devuelve una pantalla hacia atrás. Extraído de `resources/ScriptanexoREP.vbs`
+# (líneas finales: dos `press` seguidos) — desde la pantalla de resultados de
+# AR15, dos "Atrás" devuelven a SAP a la pantalla inicial, dejándolo listo
+# para la siguiente sociedad del multiselect.
+BTN_ATRAS_SAP = "wnd[0]/tbar[0]/btn[3]"
 
 # Shell del calendario emergente que aparece al presionar F4 sobre un
 # campo de fecha de SAP. Vía: setFocus + sendVKey(4) sobre el campo →
@@ -467,6 +481,35 @@ def abrir_transaccion_sox(session) -> None:
             f"  3. El campo 'Transacción' muestra la T-code (ej. ZSOX_REPORT).\n\n"
             f"Nodos visibles en tu árbol actual:\n{nodos_disponibles}"
         ) from exc
+
+
+def volver_a_pantalla_inicial(session, veces: int = 2) -> None:
+    """Devuelve SAP a la pantalla inicial presionando "Atrás" (F3) `veces`.
+
+    Replica el final de `resources/ScriptanexoREP.vbs` (dos `press` sobre
+    `wnd[0]/tbar[0]/btn[3]`). Necesario entre sociedades del multiselect: tras
+    exportar el reporte, SAP queda en la pantalla de resultados de AR15; dos
+    "Atrás" lo devuelven a la pantalla inicial para poder abrir AR15 de nuevo.
+
+    Cada press es **best-effort** (se loguea pero NO se relanza si falla): si
+    SAP ya estaba una pantalla más arriba, o el botón no está disponible en
+    ese estado, no queremos abortar el flujo por eso — la apertura de la
+    siguiente sociedad usa igual `/nAR15`, que reinicia desde cualquier lado.
+
+    IMPORTANTE: `veces` es fijo en 2 (como el recording), NO "hasta el tope".
+    Presionar Atrás de más en la pantalla inicial de SAP dispara el popup
+    "¿Desea salir del sistema?"; por eso solo se llama desde el estado de
+    resultados, donde 2 Atrás = pantalla inicial.
+    """
+    _log(f"Volviendo a la pantalla inicial ({veces}× Atrás F3)...")
+    for i in range(1, veces + 1):
+        try:
+            boton = session.findById(BTN_ATRAS_SAP)
+            boton.press()
+            _log(f"  Atrás {i}/{veces} OK")
+        except Exception as exc:  # best-effort: no abortar el flujo
+            _log(f"  Atrás {i}/{veces} no disponible (ignorado): {exc!r}")
+            break
 
 
 def _seleccionar_fecha_calendario(
@@ -1522,6 +1565,7 @@ def generar_reporte_sox(
                     "EXPORT_METHOD=None → omitiendo Población y hoja IPE "
                     "(no hay archivo SAP del cual leer)."
                 )
+                volver_a_pantalla_inicial(session)
                 duracion = time.monotonic() - inicio
                 _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
                 return carpeta_destino, nombre_archivo
@@ -1542,6 +1586,12 @@ def generar_reporte_sox(
             # Restaurar la ventana de la app aunque haya fallado alguna
             # etapa — si no, el usuario se queda sin GUI visible.
             _restaurar_ventanas_app()
+
+    # Devolver SAP a la pantalla inicial para que la siguiente sociedad del
+    # multiselect pueda abrir AR15 de nuevo (extraído de ScriptanexoREP.vbs:
+    # dos "Atrás" desde la pantalla de resultados). El caso de fallo a mitad
+    # de flujo se cubre con el prefijo `/nAR15` de `abrir_transaccion_sox`.
+    volver_a_pantalla_inicial(session)
 
     duracion = time.monotonic() - inicio
     _log(f"=== Flujo SOX finalizado en {duracion:.1f}s ===")
