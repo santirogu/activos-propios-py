@@ -47,6 +47,45 @@ class ExportSheetToTsvTest(unittest.TestCase):
 
         self.assertEqual(out_path.read_text(encoding="utf-8"), "x\t\ty\n\tz\t\n")
 
+    def test_embedded_newline_in_cell_does_not_break_row(self) -> None:
+        """REGRESIÓN: una celda con un salto de línea interno (ej. la columna
+        ZZPOSNR con 'RI-POAS1-7.1.01\\n ') NO debe partir el registro en
+        varias líneas físicas. Cada fila del Excel = 1 línea física con el
+        mismo número de campos que columnas, para que LSMW (que lee por
+        posición) no reciba las columnas desplazadas / el KOSTL vacío."""
+        self._make_workbook(
+            "S",
+            [
+                ["A451213", "RI-POAS1-7.1.01\n ", "IURR2L12BL"],  # \n embebido
+                ["A451214", "RI-POAS1-7.1.02", "IURR2L14BL"],
+            ],
+        )
+
+        out_path, rows = export_sheet_to_tsv(self.excel_path, "S", self.output_dir)
+        lineas = out_path.read_text(encoding="utf-8").splitlines()
+
+        # 2 filas de datos → EXACTAMENTE 2 líneas físicas (no 3+).
+        self.assertEqual(rows, 2)
+        self.assertEqual(len(lineas), 2)
+        # Cada línea tiene 3 campos (el \n se volvió espacio, no rompió nada).
+        for ln in lineas:
+            self.assertEqual(len(ln.split("\t")), 3)
+        # El tercer campo (posición fija) conserva el centro de costo.
+        self.assertEqual(lineas[0].split("\t")[2], "IURR2L12BL")
+        # El salto quedó neutralizado a espacio dentro del campo.
+        self.assertNotIn("\n", lineas[0].split("\t")[1])
+        self.assertIn("RI-POAS1-7.1.01", lineas[0].split("\t")[1])
+
+    def test_embedded_tab_in_cell_is_neutralized(self) -> None:
+        """Un tab interno tampoco debe agregar columnas fantasma."""
+        self._make_workbook("S", [["a\tb", "c"]])
+
+        out_path, _ = export_sheet_to_tsv(self.excel_path, "S", self.output_dir)
+        linea = out_path.read_text(encoding="utf-8").splitlines()[0]
+
+        self.assertEqual(len(linea.split("\t")), 2)  # 2 campos, no 3
+        self.assertEqual(linea.split("\t")[0], "a b")
+
     def test_creates_output_directory_if_missing(self) -> None:
         self._make_workbook("S", [["a"]])
         nested = self.output_dir / "nivel1" / "nivel2"

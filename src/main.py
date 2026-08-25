@@ -158,6 +158,24 @@ def _refrescar_estado_boton_subir(button: tk.Widget) -> None:
     button.config(state="normal" if _hay_txt_en_salida() else "disabled")
 
 
+def _sanitizar_celda_tsv(v) -> str:
+    """Convierte un valor de celda a texto seguro para una fila TSV.
+
+    Reemplaza por un espacio cualquier carácter que rompa la estructura del
+    .txt: saltos de línea (`\\r\\n`, `\\n`, `\\r`) y tabuladores (`\\t`)
+    EMBEBIDOS dentro de la celda. Sin esto, una celda con un Enter interno
+    (ej. la columna ZZPOSNR con `'RI-POAS1-7.1.01\\n '`) parte el registro en
+    varias líneas físicas y desplaza todas las columnas siguientes — SAP lee
+    entonces campos corridos/vacíos (ej. el centro de costo KOSTL sale vacío).
+    """
+    if v is None:
+        return ""
+    texto = str(v)
+    for ch in ("\r\n", "\n", "\r", "\t"):
+        texto = texto.replace(ch, " ")
+    return texto
+
+
 def export_sheet_to_tsv(
     excel_path: Path,
     sheet_name: str,
@@ -165,7 +183,13 @@ def export_sheet_to_tsv(
     file_prefix: str = "LSMW",
 ) -> tuple[Path, int]:
     """Lee `sheet_name` del workbook en `excel_path` y escribe un .txt
-    separado por tabulación dentro de `output_dir`. Devuelve (ruta, filas)."""
+    separado por tabulación dentro de `output_dir`. Devuelve (ruta, filas).
+
+    Cada fila del Excel se escribe como EXACTAMENTE una línea física con
+    tantos campos como columnas tenga la hoja: los saltos de línea/tabs
+    internos de cada celda se neutralizan con `_sanitizar_celda_tsv` para no
+    corromper la alineación de columnas que LSMW lee por posición.
+    """
     if not excel_path.exists():
         raise FileNotFoundError(f"No se encontró el archivo: {excel_path}")
 
@@ -181,7 +205,7 @@ def export_sheet_to_tsv(
     rows_written = 0
     with output_path.open("w", encoding="utf-8", newline="") as f:
         for row in ws.iter_rows(values_only=True):
-            cells = ["" if v is None else str(v) for v in row]
+            cells = [_sanitizar_celda_tsv(v) for v in row]
             f.write("\t".join(cells) + "\n")
             rows_written += 1
 

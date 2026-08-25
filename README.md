@@ -261,11 +261,11 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 ### Cobertura de pruebas
 
-La suite contiene **381 pruebas** distribuidas en siete archivos:
+La suite contiene **383 pruebas** distribuidas en siete archivos:
 
-#### `tests/test_main.py` (105 pruebas)
+#### `tests/test_main.py` (107 pruebas)
 
-**`ExportSheetToTsvTest`** (9 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp.
+**`ExportSheetToTsvTest`** (11 pruebas) — lógica pura de extracción TSV: contenido tab-separated, manejo de `None`, creación de directorios, patrón de timestamp, prefijo configurable, errores de archivo/hoja faltantes, contador de filas, no-overwrite por timestamp, y **saneo de saltos de línea/tabs internos** (una celda con `\n`/`\t` no parte el registro ni agrega columnas — evita que SAP reciba las columnas desplazadas / el KOSTL vacío).
 
 **`RealWorkbookSmokeTest`** (1 prueba) — smoke test contra el Excel real del proyecto.
 
@@ -506,7 +506,7 @@ No sirve para entregar al usuario final.
 │   ├── extraer_activos_creados.py   # SM35P: filtro por usuario SAP + export del log
 │   └── subir_anexos.py              # AS02 + GOS PCATTA_CREA: adjunta archivos a cada activo
 ├── tests/
-│   ├── test_main.py                 # 105 pruebas: extracción + botones + vistas + multiselect SOX + footer + splash + regresión calendario
+│   ├── test_main.py                 # 107 pruebas: extracción (+ saneo de saltos de línea) + botones + vistas + multiselect SOX + footer + splash + calendario
 │   ├── test_paths.py                # 18 pruebas: helpers dev/bundled + resolución entrada/ + factory default + validación 1-xlsm
 │   ├── test_branding.py             # 15 pruebas: paleta + logo + estilos de botón
 │   ├── test_sap_upload.py           # 46 pruebas: flujo LSMW completo
