@@ -481,48 +481,56 @@ class StepAssignFilesTest(unittest.TestCase):
 
 
 class StepReadDataTest(unittest.TestCase):
-    def test_executes_read_then_returns_twice(self):
+    def test_executes_read_then_returns_to_steplist(self):
+        """Tras leer datos, vuelve al step list vía `_volver_al_step_list`
+        (retorno basado en estado), NO con un nº fijo de Back que se pasaba
+        hasta 'Project Selection' en algunos entornos."""
         session = MockSAPSession()
-        step_read_data(session)
+        with patch("sap_upload._volver_al_step_list") as mock_volver:
+            step_read_data(session)
 
         steplist = session._elements[LSMW_STEPLIST_TABLE]
         self.assertTrue(steplist._rows[READ_DATA_ROW]._selected)
         self.assertIn(("wnd[0]/tbar[1]/btn[32]", "press"), session.actions)
         self.assertIn(("wnd[0]/tbar[1]/btn[8]", "press"), session.actions)
-
-        backs = [a for a in session.actions if a == ("wnd[0]", "sendVKey", 3)]
-        self.assertEqual(len(backs), 2)
+        # Ya NO hay Back de conteo fijo; el retorno lo hace el helper robusto.
+        self.assertNotIn(("wnd[0]", "sendVKey", 3), session.actions)
+        mock_volver.assert_called_once_with(session)
 
 
 class StepDisplayReadDataTest(unittest.TestCase):
     def test_executes_confirms_popup_and_returns(self):
         session = MockSAPSession()
-        step_display_read_data(session)
+        with patch("sap_upload._volver_al_step_list") as mock_volver:
+            step_display_read_data(session)
 
         self.assertIn(("wnd[0]/tbar[1]/btn[32]", "press"), session.actions)
         self.assertIn(("wnd[1]", "sendVKey", 0), session.actions)
-        self.assertIn(("wnd[0]", "sendVKey", 3), session.actions)
+        mock_volver.assert_called_once_with(session)
 
 
 class StepConvertDataTest(unittest.TestCase):
-    def test_executes_with_f8_and_returns_twice(self):
+    def test_executes_with_f8_and_returns_to_steplist(self):
         session = MockSAPSession()
-        step_convert_data(session)
+        with patch("sap_upload._volver_al_step_list") as mock_volver:
+            step_convert_data(session)
 
         self.assertIn(("wnd[0]/tbar[1]/btn[32]", "press"), session.actions)
         self.assertIn(("wnd[0]", "sendVKey", 8), session.actions)
-        backs = [a for a in session.actions if a == ("wnd[0]", "sendVKey", 3)]
-        self.assertEqual(len(backs), 2)
+        # F8 (convertir) sí, pero el retorno ya no es Back de conteo fijo.
+        self.assertNotIn(("wnd[0]", "sendVKey", 3), session.actions)
+        mock_volver.assert_called_once_with(session)
 
 
 class StepDisplayConvertedDataTest(unittest.TestCase):
     def test_executes_confirms_popup_and_returns(self):
         session = MockSAPSession()
-        step_display_converted_data(session)
+        with patch("sap_upload._volver_al_step_list") as mock_volver:
+            step_display_converted_data(session)
 
         self.assertIn(("wnd[0]/tbar[1]/btn[32]", "press"), session.actions)
         self.assertIn(("wnd[1]", "sendVKey", 0), session.actions)
-        self.assertIn(("wnd[0]", "sendVKey", 3), session.actions)
+        mock_volver.assert_called_once_with(session)
 
 
 class StepCreateBatchInputTest(unittest.TestCase):

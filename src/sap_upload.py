@@ -519,9 +519,12 @@ def step_read_data(session) -> None:
         session.findById, "wnd[0]/tbar[1]/btn[8]",
     )
     _ejecutar("Pulsar F8 para leer datos", boton_f8.press)
-    wnd = _ejecutar("Localizar wnd[0]", session.findById, "wnd[0]")
-    _ejecutar("Pulsar Back (sendVKey 3)", wnd.sendVKey, 3)
-    _ejecutar("Pulsar Back otra vez (sendVKey 3)", wnd.sendVKey, 3)
+    # Volver al step list de forma ROBUSTA (detectando la tabla), NO con un
+    # nº fijo de Back: en algunos entornos la pantalla de resultados de Read
+    # Data queda una menos, y el 2º Back se pasaba de largo hasta "Project
+    # Selection", dejando SAP fuera del step list → el paso siguiente fallaba
+    # con "control could not be found by id" (btn[32] Execute inexistente ahí).
+    _volver_al_step_list(session)
 
 
 def step_display_read_data(session) -> None:
@@ -533,8 +536,8 @@ def step_display_read_data(session) -> None:
     )
     _ejecutar("Pulsar Execute en step list", boton_exec.press)
     _confirmar_popup_opcional(session, "Confirmar popup de visualización")
-    wnd = _ejecutar("Localizar wnd[0]", session.findById, "wnd[0]")
-    _ejecutar("Pulsar Back (sendVKey 3)", wnd.sendVKey, 3)
+    # Retorno robusto al step list (ver nota en step_read_data).
+    _volver_al_step_list(session)
 
 
 def step_convert_data(session) -> None:
@@ -547,8 +550,9 @@ def step_convert_data(session) -> None:
     _ejecutar("Pulsar Execute en step list", boton_exec.press)
     wnd = _ejecutar("Localizar wnd[0]", session.findById, "wnd[0]")
     _ejecutar("Pulsar F8 (sendVKey 8) para convertir", wnd.sendVKey, 8)
-    _ejecutar("Pulsar Back (sendVKey 3)", wnd.sendVKey, 3)
-    _ejecutar("Pulsar Back otra vez (sendVKey 3)", wnd.sendVKey, 3)
+    # Retorno robusto al step list (ver nota en step_read_data): evita que un
+    # 2º Back de conteo fijo se pase hasta "Project Selection".
+    _volver_al_step_list(session)
 
 
 def step_display_converted_data(session) -> None:
@@ -560,8 +564,8 @@ def step_display_converted_data(session) -> None:
     )
     _ejecutar("Pulsar Execute en step list", boton_exec.press)
     _confirmar_popup_opcional(session, "Confirmar popup de visualización")
-    wnd = _ejecutar("Localizar wnd[0]", session.findById, "wnd[0]")
-    _ejecutar("Pulsar Back (sendVKey 3)", wnd.sendVKey, 3)
+    # Retorno robusto al step list (ver nota en step_read_data).
+    _volver_al_step_list(session)
 
 
 def step_create_batch_input(session) -> None:

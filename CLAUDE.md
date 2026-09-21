@@ -182,10 +182,10 @@ Replica las grabaciones VBS de SAP. Granularidad fina: cada paso es una función
 | 1 | `open_lsmw` | — | maximize + okcd="LSMW" + Enter + F8 |
 | 2 | `configurar_ruta_archivo(carpeta, nombre)` | 6 (Specify Files) | F2 + btn[25] (Cambiar) + lbl[43,6] + btn[27] (Asignar) + F4 picker + DY_PATH/DY_FILENAME + 2×OK + Back + SPOP-OPTION1 (popup *opcional*) |
 | 3 | `step_assign_files` | 7 | btn[32] + F3 |
-| 4 | `step_read_data` | 8 | btn[32] + F8 + 2×F3 |
-| 5 | `step_display_read_data` | (auto-avanza) | btn[32] + popup opcional + F3 |
-| 6 | `step_convert_data` | (auto-avanza) | btn[32] + F8 + 2×F3 |
-| 7 | `step_display_converted_data` | (auto-avanza) | btn[32] + popup opcional + F3 |
+| 4 | `step_read_data` | 8 | btn[32] + F8 + `_volver_al_step_list` |
+| 5 | `step_display_read_data` | (auto-avanza) | btn[32] + popup opcional + `_volver_al_step_list` |
+| 6 | `step_convert_data` | (auto-avanza) | btn[32] + F8 + `_volver_al_step_list` |
+| 7 | `step_display_converted_data` | (auto-avanza) | btn[32] + popup opcional + `_volver_al_step_list` |
 | 8 | `step_create_batch_input` | (auto-avanza) | btn[32] + chkP_KEEP=True + F8 + popup + `_volver_al_step_list` |
 | 9 | `step_run_batch_input` | 13 (explícita) | `select_step_row` + btn[32] |
 | 10 | `process_bdc_session` | (tabla BDC) | row[0] + GROUPID focus + F8 + radD0300-ERROR + chkLOGALL + chkEXPERT + 2×OK |
@@ -420,7 +420,7 @@ python -m unittest tests.test_main.SubirASapTest.test_worker_calls_full_flow_on_
 
 - **Granularidad fina de funciones por paso SAP** — no es sobre-ingeniería sino que permite testear cada paso aislado con `MockSAPSession`. Sin esto, habría que mockear el flujo completo de 10 pasos para verificar uno.
 - **Popups condicionales (`_confirmar_popup_opcional`)** — SAP a veces muestra popup, a veces no, según si hay cambios pendientes. La función intenta `wnd[1].sendVKey(0)` y captura el error sin romper.
-- **Retorno al step list (`_volver_al_step_list`)** — SAP no siempre auto-retorna tras confirmar un popup; los pasos 8/9/10 son donde esto se manifestaba como flakiness. La función envía F3 hasta encontrar la tabla, con tope de intentos.
+- **Retorno al step list (`_volver_al_step_list`)** — SAP no siempre apila la misma cantidad de pantallas por paso, así que un nº FIJO de Back (F3) es frágil: si se presiona uno de más, se sale del step list hacia "Project Selection" y el siguiente paso falla al buscar el Execute `btn[32]` (que no existe ahí). La función envía F3 **solo hasta encontrar la tabla del step list** (con tope de intentos), adaptándose al entorno. Se aplica a los pasos **4-10** (read/display/convert y create/run BI); los pasos 4-7 usaban Back de conteo fijo — incluidos dobles en read/convert — hasta que ese over-back se detectó rompiendo la carga en un SAP real (error `"control could not be found by id"` en `step_display_read_data`).
 - **Selección explícita de la fila 13 en `step_run_batch_input`** — no se confía en el auto-advance del cursor de SAP, se selecciona explícitamente para hacer el flujo determinista entre corridas.
 - **Apartamento COM en threads** — `pythoncom.CoInitialize()` obligatorio en threads no-main de Windows; sin esto el COM falla aunque SAP esté abierto.
 - **Import lazy de `sap_upload` / `sox_report` dentro del worker** — permite que `main.py` arranque en macOS/Linux sin pywin32 (los botones SAP fallan al ejecutarse, pero la GUI carga).
